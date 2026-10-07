@@ -59,6 +59,19 @@ Read-only tools. No writes to your stores, no production risk.
 - More connectors: OpenSearch, Elasticsearch, Milvus, Weaviate, and others, driven by demand
 - More providers: Gemini, Azure OpenAI, Cohere, Voyage, Bedrock, sentence-transformers
 
+## Phase 4: API and web UI
+
+Starts once the CLI covers the full workflow (`doctor`, `bench`, `plan`, `apply`, `eval`,
+`cutover`).
+
+- REST API over the same engine the CLI uses, so both always behave the same
+- Web UI for running and watching jobs: progress, throughput, errors, and cost
+- Visual views of `doctor` and `bench` reports
+- Guided cutover and rollback
+
+To keep this cheap later, the CLI stays a thin layer over the engine, and the `--json`
+output is treated as a stable contract that the API can reuse.
+
 ## Not planned
 
 These were considered and set aside. They may be revisited if users ask for them.
@@ -69,7 +82,6 @@ These were considered and set aside. They may be revisited if users ask for them
 - **Adapter mode** (mapping old vectors into the new space with a learned transform).
   Published results retain roughly 86–92% of retrieval quality, which most teams won't accept
   permanently.
-- **A web UI.** The CLI and YAML come first.
 
 ## Ideas
 
