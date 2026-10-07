@@ -50,6 +50,21 @@ KNOWN_PRICES = {
     "text-embedding-ada-002": 0.10,
 }
 
+# Native output size of well-known models, so plans know the target column size without
+# calling the API. Matched on the model's base name, without any path prefix or tag.
+KNOWN_DIMENSIONS = {
+    "text-embedding-3-small": 1536,
+    "text-embedding-3-large": 3072,
+    "text-embedding-ada-002": 1536,
+    "nomic-embed-text": 768,
+    "mxbai-embed-large": 1024,
+    "bge-m3": 1024,
+    "all-minilm": 384,
+}
+
+# Models known to accept a smaller ``dimensions`` request (Matryoshka truncation).
+SUPPORTS_DIMENSIONS = {"text-embedding-3-small", "text-embedding-3-large"}
+
 _SEARCH_INSTRUCTION = "Represent this sentence for searching relevant passages: "
 
 # (pattern, query prefix, document prefix) for models trained with prompts. Using the
@@ -90,6 +105,20 @@ class ModelSpec:
             return True
         host = urlparse(self.url or "").hostname or ""
         return host in LOCAL_HOSTS
+
+    @property
+    def base_model(self) -> str:
+        """``BAAI/bge-m3`` → ``bge-m3``; ``nomic-embed-text:latest`` → ``nomic-embed-text``."""
+        return self.model.rsplit("/", 1)[-1].split(":", 1)[0].lower()
+
+    @property
+    def native_dimensions(self) -> int | None:
+        return KNOWN_DIMENSIONS.get(self.base_model)
+
+    @property
+    def output_dimensions(self) -> int | None:
+        """What this spec will produce, if known without calling the model."""
+        return self.dimensions or self.native_dimensions
 
     @property
     def identity(self) -> str:

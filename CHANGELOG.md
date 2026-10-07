@@ -14,6 +14,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `vecshift init` writes a commented `vecshift.yaml` job file describing a migration: the
+  source table, the side-by-side target column, the new model, and limits such as a budget.
+- `vecshift plan` checks a job against the database without changing anything. It shows
+  the SQL apply would run, estimates rows, tokens, cost, duration, storage, and index build
+  memory, and reports anything that would make the migration fail, exiting with status 1 on
+  errors. `--probe` measures the real model's size, token counts, and speed on 16 rows.
 - `vecshift bench` compares embedding models on a sample of your documents, from a JSONL
   file or a pgvector table. It reports recall@1, recall@10, MRR@10, query latency,
   throughput, cost per million documents, and storage, as a terminal table, `--json`, or an

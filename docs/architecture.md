@@ -122,6 +122,17 @@ with known answers), runs each model over it, scores retrieval with exact cosine
 and renders the results. HTML pages for both `doctor` and `bench` share one shell, logo,
 stylesheet, and script from [`html_kit`](../src/vecshift/html_kit.py).
 
+## Jobs and plans
+
+A [`JobSpec`](../src/vecshift/jobs/spec.py) is the validated form of `vecshift.yaml`. The
+CLI reads it today; the API and UI planned for Phase 4 will read and write the same
+structure.
+
+[`build_plan`](../src/vecshift/planning/planner.py) combines the job, doctor's profile of
+the source, the state of the target column, a sample of text lengths, and an optional probe
+of the model into a [`Plan`](../src/vecshift/planning/plan.py): the changes apply would
+make (with their SQL), estimates, and findings in the same form doctor uses.
+
 ## Change capture
 
 Keeping a shadow index in sync with live writes depends on what the source offers:

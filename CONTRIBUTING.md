@@ -52,6 +52,8 @@ src/vecshift/
   doctor/      # store-independent diagnosis: profile, checks, findings
   embeddings/  # model specs, providers, and the embedding cache
   bench/       # model benchmarking: corpus, queries, metrics, runner, leaderboard
+  jobs/        # the vecshift.yaml job spec
+  planning/    # turning a job into a plan: changes, estimates, findings
   connectors/  # one package per store, e.g. pgvector
   cli.py       # command-line interface
 tests/         # pytest suite

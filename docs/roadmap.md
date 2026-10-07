@@ -43,7 +43,9 @@ Read-only tools. No writes to your stores, no production risk.
 
 ## Phase 2: Migrate safely
 
-- `vecshift plan`: validate schemas and estimate tokens, cost, time, and storage
+- [x] `vecshift init` and the `vecshift.yaml` job file
+- [x] `vecshift plan`: validate the job against the database and estimate tokens, cost, time,
+  and storage, with an optional `--probe` of the real model
 - `vecshift apply`: re-embed into a shadow index or named vector
   - checkpoints and resume
   - idempotent upserts guarded by `updated_at`

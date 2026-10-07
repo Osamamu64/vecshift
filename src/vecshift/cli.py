@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import json
-import shutil
-import textwrap
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated
@@ -12,6 +10,8 @@ from typing import Annotated
 import typer
 
 from vecshift import __version__
+from vecshift.cli_style import STYLE as _STYLE
+from vecshift.cli_style import wrap as _wrap
 from vecshift.core.fingerprint import EmbeddingFingerprint
 from vecshift.doctor import Report, Severity, run_checks
 
@@ -77,22 +77,6 @@ class FailOn(StrEnum):
     NEVER = "never"
     WARNING = "warning"
     ERROR = "error"
-
-
-_STYLE = {
-    Severity.ERROR: ("✖ ERROR  ", typer.colors.RED, "error"),
-    Severity.WARNING: ("⚠ WARNING", typer.colors.YELLOW, "warning"),
-    Severity.INFO: ("● INFO   ", typer.colors.BLUE, "info"),
-    Severity.OK: ("✔ OK     ", typer.colors.GREEN, "ok"),
-}
-
-
-_INDENT = " " * 11
-
-
-def _wrap(text: str) -> str:
-    width = min(100, shutil.get_terminal_size((100, 24)).columns)
-    return textwrap.fill(text, width=width, initial_indent=_INDENT, subsequent_indent=_INDENT)
 
 
 def _render(report: Report, connection: str) -> None:
@@ -228,3 +212,8 @@ def doctor(
 from vecshift.cli_bench import bench  # noqa: E402
 
 app.command()(bench)
+
+from vecshift.cli_plan import init, plan  # noqa: E402
+
+app.command()(init)
+app.command()(plan)
