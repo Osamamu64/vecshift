@@ -15,20 +15,24 @@ Dates aren't promised. Each phase ships when it works.
 - [ ] Plugin loading through entry points
 - [ ] Mock embedding provider and local store for a free first run
 
-## Phase 1: Know your index
+## Phase 1: Know your index ✅ in progress
 
 Read-only tools. No writes to your stores, no production risk.
 
-- **`vecshift doctor`**: inspect an index and report
-  - mixed model versions in one index
-  - unnormalized vectors
-  - duplicate or near-duplicate chunks
-  - missing source text (the index can't be re-embedded as-is)
-  - dimension waste (where Matryoshka truncation could save storage)
-  - which change-capture strategy the source supports
+- [x] **`vecshift doctor`** for pgvector and Supabase: inspect an index and report
+  - [x] mixed models or vector sizes in one index
+  - [x] zero and unnormalized vectors
+  - [x] exact duplicate texts and vectors
+  - [x] missing source text (the index can't be re-embedded as-is)
+  - [x] missing ANN indexes, and vectors too large to index
+  - [x] which change-capture strategy the source supports
+  - [x] row-level security hiding rows
+  - [ ] near-duplicate chunks
+  - [ ] dimension waste (where Matryoshka truncation could save storage)
+- [ ] `vecshift doctor` for Qdrant
 - **`vecshift bench`**: compare embedding models on a sample of your own data, reporting
   recall@k, latency, cost per million documents, and storage
-- Connectors (read only): **pgvector**, **Qdrant**
+- Connectors (read only): **pgvector** ✅, **Qdrant**
 - Providers: **OpenAI-compatible** (covers OpenAI, vLLM, Ollama, TEI, and most hosted
   inference) and **mock**
 

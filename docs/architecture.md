@@ -95,6 +95,19 @@ Defined as `typing.Protocol`s in [`contracts.py`](../src/vecshift/core/contracts
 Third-party plugins will register through the `vecshift.plugins` entry-point group, so
 connectors can ship without changes to core.
 
+## Doctor
+
+`vecshift doctor` is split so the checks don't depend on any particular store:
+
+1. A connector inspects the store and fills in an
+   [`IndexProfile`](../src/vecshift/doctor/profile.py): schema facts plus statistics over a
+   sample of rows. The [pgvector inspector](../src/vecshift/connectors/pgvector/inspect.py)
+   computes dimensions, norms, and hashes in SQL, so vectors never leave the database.
+2. [Checks](../src/vecshift/doctor/checks.py) read only the profile and return findings.
+3. The CLI renders the [report](../src/vecshift/doctor/findings.py) as text or JSON.
+
+Adding `doctor` support for another store means writing step 1 only.
+
 ## Change capture
 
 Keeping a shadow index in sync with live writes depends on what the source offers:

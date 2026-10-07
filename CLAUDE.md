@@ -12,6 +12,8 @@
 uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest
 ```
 
+Integration tests need `VECSHIFT_TEST_PG_DSN`; see CONTRIBUTING.md.
+
 ## Architecture rule
 
 `src/vecshift/core` must not import from `vecshift.cli` or any other presentation layer.

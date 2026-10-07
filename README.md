@@ -7,8 +7,9 @@
 ![Status: pre-alpha](https://img.shields.io/badge/status-pre--alpha-orange)
 
 > [!WARNING]
-> VecShift is in early development. The core types and CLI are taking shape, but it cannot
-> migrate an index yet. Watch the repo or read the [roadmap](docs/roadmap.md) to follow along.
+> VecShift is in early development. `vecshift doctor` works today for pgvector and Supabase;
+> migrations aren't built yet. Watch the repo or read the [roadmap](docs/roadmap.md) to
+> follow along.
 
 ---
 
@@ -30,7 +31,7 @@ VecShift answers those first, then makes the migration itself safe and repeatabl
 | Command | Purpose | Status |
 |---|---|---|
 | `vecshift fingerprint` | Print a stable tag identifying an embedding configuration's vector space | ✅ Available |
-| `vecshift doctor` | Inspect an index: mixed models, unnormalized vectors, duplicates, missing text, wasted dimensions | 🚧 Next |
+| `vecshift doctor` | Inspect an index: mixed models or sizes, zero and unnormalized vectors, duplicates, missing text, indexing and change-tracking gaps | ✅ pgvector and Supabase |
 | `vecshift bench` | Compare embedding models on a sample of *your* data: recall, latency, cost, storage | 🚧 Next |
 | `vecshift plan` | Dry run: validate schemas, estimate tokens, cost, time, and storage | 📋 Planned |
 | `vecshift apply` | Re-embed into a shadow index with checkpoints, resume, and rate limiting | 📋 Planned |
@@ -62,6 +63,40 @@ uv sync
 uv run vecshift --help
 ```
 
+### Check an existing pgvector or Supabase index
+
+`doctor` is read-only and never downloads your vectors, so it's safe against production.
+
+```bash
+export VECSHIFT_DSN='postgresql://postgres.<project-ref>:<password>@<region>.pooler.supabase.com:5432/postgres'
+uv run vecshift doctor --table public.documents
+```
+
+Abridged output:
+
+```text
+vecshift doctor · pgvector via Supabase session pooler
+Target  public.documents.embedding  vector
+Rows    ~1,001 (inspected 1,001, full table)
+
+✖ ERROR    Vectors of different sizes in one index
+           Sampled vectors have 2 different sizes: 1536 (901), 3072 (100). They
+           come from different models and can't be compared with each other.
+✖ ERROR    Vectors from more than one model
+           `metadata->>'model'` records 2 different models: text-embedding-ada-002
+           (900), text-embedding-3-small (100). ...
+⚠ WARNING  No way to track writes during a migration
+           There's no logical replication and no updated-at timestamp column, ...
+✔ OK       Source text available
+           Every sampled row has text in `content`, so the index can be re-embedded.
+```
+
+Add `--json` for scripts, or `--fail-on error` to fail a CI job. See the
+[pgvector and Supabase guide](docs/connectors/pgvector.md) for connection strings, row-level
+security, and a read-only role recipe.
+
+### Fingerprint an embedding configuration
+
 Get the fingerprint of an embedding configuration:
 
 ```console
@@ -74,6 +109,7 @@ produces a different tag, because it's a different vector space.
 
 ## Documentation
 
+- [pgvector and Supabase](docs/connectors/pgvector.md): connecting, what `doctor` checks, and safety
 - [Architecture](docs/architecture.md): the canonical record, plugin contracts, and capability flags
 - [Roadmap](docs/roadmap.md): what's being built, in what order, and why
 - [Prior art](docs/prior-art.md): related tools and how VecShift relates to them

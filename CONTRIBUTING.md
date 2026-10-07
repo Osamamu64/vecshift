@@ -30,11 +30,27 @@ uv run mypy                  # strict type checking
 uv run pytest                # tests
 ```
 
+### Integration tests
+
+Tests under `tests/integration` run against a real PostgreSQL with pgvector. They're skipped
+unless `VECSHIFT_TEST_PG_DSN` is set:
+
+```bash
+docker run -d --name vecshift-pg -p 55432:5432 -e POSTGRES_PASSWORD=postgres pgvector/pgvector:pg17
+export VECSHIFT_TEST_PG_DSN=postgresql://postgres:postgres@localhost:55432/postgres
+uv run pytest
+```
+
+Each test creates and drops its own database, laid out like Supabase (pgvector in an
+`extensions` schema). CI runs them against PostgreSQL 16 and 17.
+
 ## Project layout
 
 ```
 src/vecshift/
   core/        # engine types and contracts; must not import from the CLI or UI
+  doctor/      # store-independent diagnosis: profile, checks, findings
+  connectors/  # one package per store, e.g. pgvector
   cli.py       # command-line interface
 tests/         # pytest suite
 docs/          # architecture, roadmap, prior art
