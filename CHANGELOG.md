@@ -7,7 +7,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- `vecshift doctor` sampled only the start of large tables, so rows written later (often by a
+  newer model) could be missed. Samples are now spread across the table.
+
 ### Added
+
+- Project logo, in light and dark versions, with a GitHub social preview image. The HTML
+  report shows it in its header and as its browser-tab icon. `scripts/make_logo.py`
+  regenerates the logo files.
+- `vecshift doctor --html FILE` writes a self-contained HTML report: a verdict, key numbers,
+  filterable findings, and charts of vector lengths, models, and vector sizes. It works
+  offline, supports light and dark themes, and contains statistics only.
+- The JSON report gains a `facts` section with the measurements behind the findings.
 
 - `vecshift doctor` for pgvector, including Supabase: a read-only check of an existing index
   for missing source text, mixed vector sizes or models, zero and unnormalized vectors,

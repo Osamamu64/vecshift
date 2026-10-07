@@ -1,4 +1,9 @@
-# VecShift
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/logo/vecshift-dark.svg">
+    <img src="docs/images/logo/vecshift-light.svg" alt="vecshift" height="56">
+  </picture>
+</h1>
 
 **Safe, observable embedding migrations for any vector store, with any embedding model.**
 
@@ -91,7 +96,13 @@ Rows    ~1,001 (inspected 1,001, full table)
            Every sampled row has text in `content`, so the index can be re-embedded.
 ```
 
-Add `--json` for scripts, or `--fail-on error` to fail a CI job. See the
+Add `--html report.html` for a shareable dashboard of the same results, `--json` for scripts,
+or `--fail-on error` to fail a CI job.
+
+[![A vecshift doctor HTML report: a verdict banner, key numbers, and findings](docs/images/doctor-report.png)](docs/images/doctor-report.png)
+
+The HTML report is a single file that works offline and follows your light or dark theme. It
+holds statistics only, never vectors or row text, so it's safe to attach to a ticket. See the
 [pgvector and Supabase guide](docs/connectors/pgvector.md) for connection strings, row-level
 security, and a read-only role recipe.
 

@@ -35,6 +35,7 @@ vecshift doctor --table rag.chunks --column embedding
 | `--sample-size` | Maximum rows to inspect (default 2,000). |
 | `--timeout` | Statement timeout in seconds (default 60). |
 | `--json` | Machine-readable output. |
+| `--html FILE` | Also write a self-contained HTML report: verdict, key numbers, findings, and charts. |
 | `--fail-on` | `warning` or `error`: exit with status 1 if a finding is this severe. Useful in CI. |
 
 ### What it detects
@@ -59,7 +60,10 @@ That covers the default layouts of Supabase's vector guides, LangChain, and Llam
 - **Vectors never leave the database.** Dimensions, norms, and hashes are computed in SQL,
   and only those numbers are returned.
 - On large tables it reads a **page-level sample** (`TABLESAMPLE SYSTEM`) rather than
-  scanning the whole table.
+  scanning the whole table, then keeps rows spread across that sample, so rows written
+  recently are represented as well as old ones.
+- The **HTML report** contains statistics, column names, and model names only. It never
+  includes vectors or row text, and it loads nothing from the network.
 - Passwords are never printed. Connection strings are shown with the password removed.
 
 ## Supabase

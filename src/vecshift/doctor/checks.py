@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import statistics
 from collections.abc import Callable
+from typing import Any
 
 from vecshift.doctor.findings import Finding, Report, Severity
 from vecshift.doctor.profile import IndexProfile
@@ -13,6 +15,7 @@ NORM_TOLERANCE = 0.01
 ZERO_NORM = 1e-9
 DUPLICATE_WARNING_RATIO = 0.01
 UNINDEXED_ROWS_WARNING = 100_000
+HISTOGRAM_BINS = 20
 
 Check = Callable[[IndexProfile], list[Finding]]
 
@@ -403,6 +406,61 @@ SAMPLE_CHECKS = {
 }
 
 
+def _histogram(values: list[float], bins: int = HISTOGRAM_BINS) -> list[dict[str, float]]:
+    lo, hi = min(values), max(values)
+    if hi - lo < 1e-9:
+        return [{"start": lo, "end": hi, "count": len(values)}]
+    width = (hi - lo) / bins
+    counts = [0] * bins
+    for v in values:
+        counts[min(int((v - lo) / width), bins - 1)] += 1
+    return [
+        {"start": lo + i * width, "end": lo + (i + 1) * width, "count": c}
+        for i, c in enumerate(counts)
+    ]
+
+
+def facts(profile: IndexProfile) -> dict[str, Any]:
+    """The measurements behind the findings, in a JSON-friendly shape."""
+    s = profile.sample
+    nonzero = [n for n in s.norms if n >= ZERO_NORM]
+    norms: dict[str, Any] | None = None
+    if s.norms:
+        norms = {
+            "count": len(s.norms),
+            "zero": len(s.norms) - len(nonzero),
+            "unit": sum(1 for n in nonzero if abs(n - 1.0) <= NORM_TOLERANCE),
+            "min": min(s.norms),
+            "median": statistics.median(s.norms),
+            "max": max(s.norms),
+            "tolerance": NORM_TOLERANCE,
+            "histogram": _histogram(s.norms),
+        }
+    return {
+        "text_field": profile.text_field,
+        "model_field": profile.model_field,
+        "updated_at_field": profile.updated_at_field,
+        "has_primary_key": profile.has_primary_key,
+        "logical_replication": profile.logical_replication,
+        "rows_hidden_by_access_rules": profile.rows_hidden_by_access_rules,
+        "max_indexable_dimensions": profile.max_indexable_dimensions,
+        "ann_indexes": [
+            {"name": i.name, "method": i.method, "metric": i.metric} for i in profile.ann_indexes
+        ],
+        "sample": {
+            "rows": s.rows,
+            "vectors": s.vectors,
+            "null_vectors": s.null_vectors,
+            "texts_present": s.texts_present,
+            "duplicate_texts": s.duplicate_texts,
+            "duplicate_vectors": s.duplicate_vectors,
+        },
+        "dimensions": {str(d): n for d, n in s.dimensions.most_common()},
+        "models": dict(s.models.most_common()),
+        "norms": norms,
+    }
+
+
 def run_checks(profile: IndexProfile) -> Report:
     """Run every check against ``profile`` and collect the findings."""
     report = Report(
@@ -413,6 +471,7 @@ def run_checks(profile: IndexProfile) -> Report:
         estimated_rows=profile.estimated_rows,
         sample_rows=profile.sample.rows,
         sample_method=profile.sample.method,
+        facts=facts(profile),
     )
     empty = profile.sample.rows == 0
     if empty:
