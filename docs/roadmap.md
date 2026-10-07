@@ -31,11 +31,15 @@ Read-only tools. No writes to your stores, no production risk.
   - [ ] near-duplicate chunks
   - [ ] dimension waste (where Matryoshka truncation could save storage)
 - [ ] `vecshift doctor` for Qdrant
-- **`vecshift bench`**: compare embedding models on a sample of your own data, reporting
-  recall@k, latency, cost per million documents, and storage
+- [x] **`vecshift bench`**: compare embedding models on a sample of your own data, reporting
+  recall@k, latency, cost per million documents, and storage, with an HTML leaderboard
+  - [x] documents from JSONL or pgvector
+  - [x] proxy, LLM-generated, and labeled queries
+  - [x] embedding cache and cost confirmation
+  - [ ] the index's existing vectors as a baseline, without re-embedding the documents
 - Connectors (read only): **pgvector** ✅, **Qdrant**
 - Providers: **OpenAI-compatible** (covers OpenAI, vLLM, Ollama, TEI, and most hosted
-  inference) and **mock**
+  inference) ✅ and a **hashing baseline** for free runs ✅
 
 ## Phase 2: Migrate safely
 

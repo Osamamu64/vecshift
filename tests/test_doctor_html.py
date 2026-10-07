@@ -6,7 +6,8 @@ import pytest
 
 from tests.test_doctor_checks import make_profile
 from vecshift.doctor import run_checks
-from vecshift.doctor.html import MAX_BARS, compact, percent, render_html
+from vecshift.doctor.html import MAX_BARS, render_html
+from vecshift.html_kit import compact, percent
 
 WHEN = datetime(2026, 10, 7, 22, 40, tzinfo=UTC)
 

@@ -14,6 +14,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `vecshift bench` compares embedding models on a sample of your documents, from a JSONL
+  file or a pgvector table. It reports recall@1, recall@10, MRR@10, query latency,
+  throughput, cost per million documents, and storage, as a terminal table, `--json`, or an
+  `--html` leaderboard. Queries come from the documents themselves (free), from an LLM
+  (`--generate-queries`), or from your labeled file (`--queries`).
+- Embedding providers: OpenAI, Ollama, any OpenAI-compatible server, and a free hashing
+  baseline, with batching, retries that respect rate limits, known query and document
+  prefixes, and an on-disk embedding cache. Installed with `pip install 'vecshift[bench]'`.
+- `bench` shows estimated tokens and cost and asks before sending text to a remote API.
 - Project logo, in light and dark versions, with a GitHub social preview image. The HTML
   report shows it in its header and as its browser-tab icon. `scripts/make_logo.py`
   regenerates the logo files.

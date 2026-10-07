@@ -223,3 +223,8 @@ def doctor(
 
     if fail_on is not FailOn.NEVER and report.worst.rank >= Severity(fail_on.value).rank:
         raise typer.Exit(1)
+
+
+from vecshift.cli_bench import bench  # noqa: E402
+
+app.command()(bench)

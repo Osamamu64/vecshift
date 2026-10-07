@@ -50,6 +50,8 @@ Each test creates and drops its own database, laid out like Supabase (pgvector i
 src/vecshift/
   core/        # engine types and contracts; must not import from the CLI or UI
   doctor/      # store-independent diagnosis: profile, checks, findings
+  embeddings/  # model specs, providers, and the embedding cache
+  bench/       # model benchmarking: corpus, queries, metrics, runner, leaderboard
   connectors/  # one package per store, e.g. pgvector
   cli.py       # command-line interface
 tests/         # pytest suite
