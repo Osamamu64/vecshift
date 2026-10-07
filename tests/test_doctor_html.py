@@ -26,9 +26,11 @@ def test_is_a_complete_self_contained_document() -> None:
     page = page_for()
     assert page.startswith("<!doctype html>")
     assert "<style>" in page and "<script>" in page
-    assert "http://" not in page and "https://" not in page
-    assert not re.search(r"<(link|img|iframe)\b", page)
-    assert not re.search(r"\b(src|href)=", page)
+    # The only URL-bearing attribute is the inline favicon; nothing points off the page.
+    assert re.findall(r'\b(?:src|href)="([a-z]+):', page) == ["data"]
+    assert not re.search(r"<(img|iframe|script src)\b", page)
+    assert "https://" not in page
+    assert "http://" not in page.replace("http://www.w3.org/2000/svg", "")
     assert "7 Oct 2026, 22:40 UTC" in page
     assert "vecshift 9.9.9" in page
 

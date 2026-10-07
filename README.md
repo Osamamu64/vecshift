@@ -1,4 +1,9 @@
-# VecShift
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/logo/vecshift-dark.svg">
+    <img src="docs/images/logo/vecshift-light.svg" alt="vecshift" height="56">
+  </picture>
+</h1>
 
 **Safe, observable embedding migrations for any vector store, with any embedding model.**
 

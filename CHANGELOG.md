@@ -14,6 +14,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Project logo, in light and dark versions, with a GitHub social preview image. The HTML
+  report shows it in its header and as its browser-tab icon. `scripts/make_logo.py`
+  regenerates the logo files.
 - `vecshift doctor --html FILE` writes a self-contained HTML report: a verdict, key numbers,
   filterable findings, and charts of vector lengths, models, and vector sizes. It works
   offline, supports light and dark themes, and contains statistics only.
