@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import json
+import shutil
+import textwrap
+from enum import StrEnum
 from typing import Annotated
 
 import typer
 
 from vecshift import __version__
 from vecshift.core.fingerprint import EmbeddingFingerprint
+from vecshift.doctor import Report, Severity, run_checks
 
 app = typer.Typer(
     name="vecshift",
@@ -65,3 +70,129 @@ def fingerprint(
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
     typer.echo(fp.model_tag)
+
+
+class FailOn(StrEnum):
+    NEVER = "never"
+    WARNING = "warning"
+    ERROR = "error"
+
+
+_STYLE = {
+    Severity.ERROR: ("✖ ERROR  ", typer.colors.RED, "error"),
+    Severity.WARNING: ("⚠ WARNING", typer.colors.YELLOW, "warning"),
+    Severity.INFO: ("● INFO   ", typer.colors.BLUE, "info"),
+    Severity.OK: ("✔ OK     ", typer.colors.GREEN, "ok"),
+}
+
+
+_INDENT = " " * 11
+
+
+def _wrap(text: str) -> str:
+    width = min(100, shutil.get_terminal_size((100, 24)).columns)
+    return textwrap.fill(text, width=width, initial_indent=_INDENT, subsequent_indent=_INDENT)
+
+
+def _render(report: Report, connection: str) -> None:
+    dims = f"({report.declared_dimensions})" if report.declared_dimensions else ""
+    rows = f"~{report.estimated_rows:,}" if report.estimated_rows is not None else "unknown"
+    typer.secho(f"vecshift doctor · {report.store} via {connection}", bold=True)
+    typer.echo(f"Target  {report.target}  {report.vector_type}{dims}")
+    typer.echo(f"Rows    {rows} (inspected {report.sample_rows:,}, {report.sample_method})")
+    typer.echo()
+    for finding in report.sorted_findings():
+        label, color, _ = _STYLE[finding.severity]
+        typer.secho(f"{label}  ", fg=color, bold=True, nl=False)
+        typer.secho(finding.title, bold=True)
+        typer.echo(_wrap(finding.detail))
+        if finding.hint:
+            typer.secho(_wrap(f"→ {finding.hint}"), dim=True)
+    typer.echo()
+    counts = [(report.count(sev), name) for sev, (_, _, name) in _STYLE.items()]
+    summary = ", ".join(
+        f"{n} {name}{'s' if n != 1 and name in ('error', 'warning') else ''}" for n, name in counts
+    )
+    typer.echo(f"Summary: {summary}")
+
+
+@app.command()
+def doctor(
+    dsn: Annotated[
+        str,
+        typer.Option(
+            envvar=["VECSHIFT_DSN", "DATABASE_URL"],
+            help="PostgreSQL connection string. Prefer the VECSHIFT_DSN environment variable "
+            "so the password stays out of your shell history.",
+            show_default=False,
+        ),
+    ],
+    table: Annotated[
+        str | None, typer.Option(help="Table to inspect, as table or schema.table.")
+    ] = None,
+    column: Annotated[
+        str | None, typer.Option(help="Vector column, if there's more than one.")
+    ] = None,
+    text_column: Annotated[
+        str | None, typer.Option(help="Column holding the source text, if not detected.")
+    ] = None,
+    sample_size: Annotated[
+        int, typer.Option(min=1, max=100_000, help="Maximum rows to inspect.")
+    ] = 2000,
+    timeout: Annotated[int, typer.Option(min=1, help="Statement timeout in seconds.")] = 60,
+    output_json: Annotated[bool, typer.Option("--json", help="Print the report as JSON.")] = False,
+    fail_on: Annotated[
+        FailOn, typer.Option(help="Exit with status 1 if any finding is this severe or worse.")
+    ] = FailOn.NEVER,
+) -> None:
+    """Inspect a pgvector index and report problems. Read-only."""
+    try:
+        from vecshift.connectors import pgvector
+    except ImportError as exc:  # pragma: no cover - depends on installed extras
+        typer.secho(
+            "The PostgreSQL driver isn't installed. Run: pip install 'vecshift[postgres]'",
+            err=True,
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(2) from exc
+
+    try:
+        settings = pgvector.prepare(dsn)
+        conn = pgvector.connect(settings, statement_timeout_s=timeout)
+    except pgvector.ConnectError as exc:
+        typer.secho(f"Couldn't connect: {exc}", err=True, fg=typer.colors.RED)
+        if exc.hint:
+            typer.echo(f"→ {exc.hint}", err=True)
+        raise typer.Exit(2) from exc
+
+    try:
+        profile = pgvector.inspect(
+            conn, table=table, column=column, text_column=text_column, sample_size=sample_size
+        )
+    except pgvector.TargetSelectionError as exc:
+        typer.secho(str(exc), err=True, fg=typer.colors.RED)
+        if exc.candidates:
+            typer.echo("Vector columns found:", err=True)
+            for c in exc.candidates:
+                dims = f"({c.dimensions})" if c.dimensions else ""
+                typer.echo(f"  {c.qualified}  {c.type}{dims}", err=True)
+        raise typer.Exit(2) from exc
+    except Exception as exc:
+        import psycopg
+
+        if isinstance(exc, psycopg.Error):
+            typer.secho(f"Inspection failed: {exc}", err=True, fg=typer.colors.RED)
+            raise typer.Exit(2) from exc
+        raise
+    finally:
+        conn.rollback()
+        conn.close()
+
+    report = run_checks(profile)
+    if output_json:
+        typer.echo(json.dumps({"connection": settings.display, **report.to_dict()}, indent=2))
+    else:
+        _render(report, settings.description)
+
+    if fail_on is not FailOn.NEVER and report.worst.rank >= Severity(fail_on.value).rank:
+        raise typer.Exit(1)

@@ -38,12 +38,18 @@ Changelog = "https://github.com/Osamamu64/vecshift/blob/main/CHANGELOG.md"
 [project.scripts]
 vecshift = "vecshift.cli:app"
 
+[project.optional-dependencies]
+postgres = [
+    "psycopg[binary]>=3.2",
+]
+
 [dependency-groups]
 dev = [
     "pytest>=8",
     "pytest-cov>=5",
     "ruff>=0.6",
     "mypy>=1.11",
+    "psycopg[binary]>=3.2",
 ]
 
 [tool.hatch.version]
@@ -55,6 +61,9 @@ packages = ["src/vecshift"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"
+markers = [
+    "integration: needs PostgreSQL with pgvector; set VECSHIFT_TEST_PG_DSN to run",
+]
 
 [tool.ruff]
 line-length = 100
