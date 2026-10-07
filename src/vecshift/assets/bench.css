@@ -1,0 +1,39 @@
+/* vecshift bench leaderboard, on top of report.css */
+.picks { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr)); gap: 12px; margin-top: 12px; }
+.pick { padding: 16px 18px; min-width: 0; }
+.pick .tile-label { font-weight: 600; }
+.pick .who { margin-top: 6px; font-size: 17px; font-weight: 650; overflow-wrap: anywhere; }
+.pick .why { margin-top: 2px; font-size: 13px; color: var(--ink-2); }
+
+.lb { padding: 6px 0 4px; }
+.lb .table-scroll { padding: 0 18px; }
+.lb table { margin: 0; min-width: 760px; }
+.lb th { font-size: 12px; white-space: nowrap; }
+.lb td { white-space: nowrap; vertical-align: middle; }
+.lb tr:last-child td { border-bottom: 0; }
+.lb .rank { color: var(--muted); width: 1%; }
+.lb .model { white-space: normal; min-width: 180px; }
+.lb .model b { display: block; font-weight: 600; overflow-wrap: anywhere; }
+.lb .model code { font-size: 11px; color: var(--muted); overflow-wrap: anywhere; }
+.lb .best { font-weight: 700; }
+.lb .failed td { color: var(--ink-2); }
+.recall { display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
+.recall .track { width: 72px; height: 6px; border-radius: 3px; background: color-mix(in oklab, var(--series) 16%, var(--surface)); overflow: hidden; }
+.recall .track span { display: block; height: 100%; background: var(--series); border-radius: 3px; }
+
+.scatter { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0 8px; }
+.scatter .plot { height: 220px; border-left: 1px solid var(--axis); }
+.vline { position: absolute; top: 0; bottom: 0; border-left: 1px solid var(--grid); }
+.pt {
+  position: absolute; width: 24px; height: 24px; margin: 0 0 -12px -12px; border-radius: 50%;
+  display: grid; place-items: center; font-size: 11px; font-weight: 700; color: #fff;
+  background: var(--series); box-shadow: 0 0 0 2px var(--surface); cursor: default;
+}
+.pt:hover, .pt:focus-visible { filter: brightness(1.15); z-index: 2; }
+.xaxis.log { position: relative; display: block; height: 16px; }
+.xaxis.log span { position: absolute; transform: translateX(-50%); }
+.method { padding: 16px 18px; }
+.method p { margin: 0 0 8px; color: var(--ink-2); }
+.method p:last-child { margin-bottom: 0; }
+.method .err { color: var(--ink); }
+.chart-note { margin: 8px 0 0; font-size: 12px; color: var(--muted); }

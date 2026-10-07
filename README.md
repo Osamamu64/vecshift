@@ -12,7 +12,7 @@
 ![Status: pre-alpha](https://img.shields.io/badge/status-pre--alpha-orange)
 
 > [!WARNING]
-> VecShift is in early development. `vecshift doctor` works today for pgvector and Supabase;
+> VecShift is in early development. `vecshift doctor` and `vecshift bench` work today;
 > migrations aren't built yet. Watch the repo or read the [roadmap](docs/roadmap.md) to
 > follow along.
 
@@ -37,7 +37,7 @@ VecShift answers those first, then makes the migration itself safe and repeatabl
 |---|---|---|
 | `vecshift fingerprint` | Print a stable tag identifying an embedding configuration's vector space | ✅ Available |
 | `vecshift doctor` | Inspect an index: mixed models or sizes, zero and unnormalized vectors, duplicates, missing text, indexing and change-tracking gaps | ✅ pgvector and Supabase |
-| `vecshift bench` | Compare embedding models on a sample of *your* data: recall, latency, cost, storage | 🚧 Next |
+| `vecshift bench` | Compare embedding models on a sample of *your* data: recall, latency, cost, storage | ✅ Available |
 | `vecshift plan` | Dry run: validate schemas, estimate tokens, cost, time, and storage | 📋 Planned |
 | `vecshift apply` | Re-embed into a shadow index with checkpoints, resume, and rate limiting | 📋 Planned |
 | `vecshift eval` | Compare old and new indexes and produce a go/no-go report | 📋 Planned |
@@ -106,6 +106,20 @@ holds statistics only, never vectors or row text, so it's safe to attach to a ti
 [pgvector and Supabase guide](docs/connectors/pgvector.md) for connection strings, row-level
 security, and a read-only role recipe.
 
+### Find the best embedding model for your data
+
+```bash
+uv run vecshift bench --docs docs.jsonl \
+  -m openai/text-embedding-3-small -m openai/text-embedding-3-large,dims=256 \
+  -m ollama/nomic-embed-text --html leaderboard.html
+```
+
+It samples your documents (from a JSONL file or a pgvector table), builds queries with
+known answers, and ranks each model by retrieval quality, query latency, cost per million
+documents, and storage. It asks before sending anything to a paid API, and caches
+embeddings so re-runs are cheap. Run it with no `-m` for a free, offline first try. See
+the [benchmarking guide](docs/bench.md).
+
 ### Fingerprint an embedding configuration
 
 Get the fingerprint of an embedding configuration:
@@ -120,6 +134,7 @@ produces a different tag, because it's a different vector space.
 
 ## Documentation
 
+- [Benchmarking embedding models](docs/bench.md): sources, model specs, query types, and metrics
 - [pgvector and Supabase](docs/connectors/pgvector.md): connecting, what `doctor` checks, and safety
 - [Architecture](docs/architecture.md): the canonical record, plugin contracts, and capability flags
 - [Roadmap](docs/roadmap.md): what's being built, in what order, and why

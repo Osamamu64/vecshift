@@ -108,6 +108,20 @@ connectors can ship without changes to core.
 
 Adding `doctor` support for another store means writing step 1 only.
 
+## Embeddings and bench
+
+[`vecshift.embeddings`](../src/vecshift/embeddings) turns model specs such as
+`openai/text-embedding-3-large,dims=256` into providers that satisfy the
+`EmbeddingProvider` contract. The OpenAI-compatible provider batches requests, limits
+concurrency, retries on rate limits and server errors, and records token usage. A
+`CachedEmbedder` wraps any provider with an on-disk cache keyed by the spec's identity,
+the mode, and the text.
+
+[`vecshift.bench`](../src/vecshift/bench) builds a `Benchmark` (documents plus queries
+with known answers), runs each model over it, scores retrieval with exact cosine search,
+and renders the results. HTML pages for both `doctor` and `bench` share one shell, logo,
+stylesheet, and script from [`html_kit`](../src/vecshift/html_kit.py).
+
 ## Change capture
 
 Keeping a shadow index in sync with live writes depends on what the source offers:
