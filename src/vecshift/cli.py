@@ -6,6 +6,7 @@ import json
 import shutil
 import textwrap
 from enum import StrEnum
+from pathlib import Path
 from typing import Annotated
 
 import typer
@@ -141,6 +142,15 @@ def doctor(
     ] = 2000,
     timeout: Annotated[int, typer.Option(min=1, help="Statement timeout in seconds.")] = 60,
     output_json: Annotated[bool, typer.Option("--json", help="Print the report as JSON.")] = False,
+    html: Annotated[
+        Path | None,
+        typer.Option(
+            "--html",
+            dir_okay=False,
+            help="Also write a self-contained HTML report to this file.",
+            show_default=False,
+        ),
+    ] = None,
     fail_on: Annotated[
         FailOn, typer.Option(help="Exit with status 1 if any finding is this severe or worse.")
     ] = FailOn.NEVER,
@@ -189,10 +199,27 @@ def doctor(
         conn.close()
 
     report = run_checks(profile)
+    if html is not None:
+        from vecshift.doctor.html import render_html
+
+        page = render_html(
+            report,
+            connection=settings.display,
+            connection_kind=settings.description,
+            version=__version__,
+        )
+        try:
+            html.write_text(page, encoding="utf-8")
+        except OSError as exc:
+            typer.secho(f"Couldn't write {html}: {exc.strerror}", err=True, fg=typer.colors.RED)
+            raise typer.Exit(2) from exc
+
     if output_json:
         typer.echo(json.dumps({"connection": settings.display, **report.to_dict()}, indent=2))
     else:
         _render(report, settings.description)
+    if html is not None:
+        typer.echo(f"HTML report written to {html}", err=output_json)
 
     if fail_on is not FailOn.NEVER and report.worst.rank >= Severity(fail_on.value).rank:
         raise typer.Exit(1)

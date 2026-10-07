@@ -27,6 +27,7 @@ Read-only tools. No writes to your stores, no production risk.
   - [x] missing ANN indexes, and vectors too large to index
   - [x] which change-capture strategy the source supports
   - [x] row-level security hiding rows
+  - [x] HTML report (`--html`)
   - [ ] near-duplicate chunks
   - [ ] dimension waste (where Matryoshka truncation could save storage)
 - [ ] `vecshift doctor` for Qdrant
@@ -88,6 +89,6 @@ These were considered and set aside. They may be revisited if users ask for them
 Things that would be good but aren't scheduled:
 
 - A static migration cost calculator page
-- A self-contained HTML migration report
+- A self-contained HTML report for migrations, like the one `doctor` has
 - "Storage diet": truncate or quantize vectors and report the recall trade-off
 - An MCP server so coding agents can run `doctor`, `bench`, and `plan`

@@ -50,6 +50,8 @@ class Report:
     sample_rows: int
     sample_method: str
     findings: list[Finding] = field(default_factory=list)
+    facts: dict[str, Any] = field(default_factory=dict)
+    """What was measured, for reports and dashboards. See ``checks.facts``."""
 
     @property
     def worst(self) -> Severity:
@@ -72,4 +74,5 @@ class Report:
             "sample": {"rows": self.sample_rows, "method": self.sample_method},
             "summary": {str(s): self.count(s) for s in Severity},
             "findings": [f.to_dict() for f in self.sorted_findings()],
+            "facts": self.facts,
         }

@@ -311,3 +311,47 @@ def test_read_all_policy_is_not_flagged(reader: str, setup: psycopg.Connection) 
         "USING (id < 100)"
     )
     assert profile_of(reader).rows_hidden_by_access_rules
+
+
+@pytest.mark.parametrize(
+    ("rows", "sample_size", "method"),
+    [
+        (20_000, 500, "table sample"),
+        (3_000, 2_000, "spread across the table"),
+    ],
+)
+def test_sample_spans_the_whole_table(
+    db_dsn: str, setup: psycopg.Connection, rows: int, sample_size: int, method: str
+) -> None:
+    """Rows written later (here, by a newer model) must show up in the sample."""
+    setup.execute(
+        "CREATE TABLE public.docs (id int PRIMARY KEY, content text, "
+        "embedding_model text, embedding extensions.vector(2))"
+    )
+    setup.execute(
+        "INSERT INTO public.docs SELECT g, 'c' || g, "
+        "CASE WHEN g <= %s THEN 'old' ELSE 'new' END, '[1,0]' FROM generate_series(1, %s) g",
+        (rows // 2, rows),
+    )
+    setup.execute("ANALYZE public.docs")
+    profile = profile_of(db_dsn, sample_size=sample_size)
+    assert profile.sample.method == method
+    assert profile.sample.rows == sample_size
+    old, new = profile.sample.models["old"], profile.sample.models["new"]
+    assert min(old, new) > sample_size * 0.3, (old, new)
+
+
+def test_cli_html_report(
+    db_dsn: str, setup: psycopg.Connection, tmp_path: pytest.TempPathFactory
+) -> None:
+    create_healthy(setup)
+    out = tmp_path / "report.html"  # type: ignore[operator]
+    result = CliRunner().invoke(
+        app, ["doctor", "--json", "--html", str(out)], env={"VECSHIFT_DSN": db_dsn}
+    )
+    assert result.exit_code == 0, result.output
+    json.loads(result.stdout)  # the notice goes to stderr, so stdout stays valid JSON
+    assert "HTML report written" in result.stderr
+    page = out.read_text(encoding="utf-8")
+    assert "Ready to migrate" in page
+    assert "public.documents.embedding" in page

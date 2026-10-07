@@ -283,11 +283,15 @@ def _sample(
         has_text = sql.SQL("NULL::boolean")
         text_hash = sql.SQL("NULL::text")
 
-    def query(tablesample: sql.Composable) -> list[tuple[Any, ...]]:
+    def query(tablesample: sql.Composable, spread: bool) -> list[tuple[Any, ...]]:
+        # Rows come back in physical order, so a bare LIMIT keeps only the start of the
+        # table. Ordering by a hash of each row's location keeps a spread-out subset
+        # instead, and the same one on every run.
+        order = sql.SQL("ORDER BY md5(ctid::text)") if spread else sql.SQL("")
         q = sql.SQL(
             "SELECT {vec} IS NULL, {fn}({vec}), {norm}({vec}), md5({vec}::text), "
             "{has_text}, {text_hash}, {model} "
-            "FROM {table} {tablesample} LIMIT {limit}"
+            "FROM {table} {tablesample} {order} LIMIT {limit}"
         ).format(
             vec=vec,
             fn=fn,
@@ -297,24 +301,30 @@ def _sample(
             model=model_expr,
             table=sql.Identifier(col.schema, col.table),
             tablesample=tablesample,
+            order=order,
             limit=sql.Literal(size),
         )
         return conn.execute(q).fetchall()
 
-    # For big tables, sample whole pages instead of reading the start of the table.
-    # SYSTEM sampling is cheap because it skips unsampled pages entirely.
-    method = "first rows"
     rows: list[tuple[Any, ...]] = []
+    method = "table sample"
     if estimated_rows and estimated_rows > size * 2:
-        percent = min(100.0, 100.0 * size * 2 / estimated_rows)
-        rows = query(sql.SQL("TABLESAMPLE SYSTEM ({}) REPEATABLE (7)").format(sql.Literal(percent)))
-        method = "table sample"
-        if len(rows) < size // 2:
-            rows, method = [], "first rows"
+        # Big table: read a random ~1.5x share of its pages. SYSTEM sampling skips the
+        # other pages entirely, so this stays cheap however large the table is.
+        percent = min(100.0, 100.0 * size * 1.5 / estimated_rows)
+        tablesample = sql.SQL("TABLESAMPLE SYSTEM ({}) REPEATABLE (7)").format(sql.Literal(percent))
+        rows = query(tablesample, spread=True)
+        if len(rows) < size // 2:  # statistics overstate the size; read it whole below
+            rows = []
     if not rows:
-        rows = query(sql.SQL(""))
+        # Statistics say the table is small, so read it all and keep a spread-out subset.
+        # Without statistics it could be huge, so read only the first rows.
+        known = estimated_rows is not None
+        rows = query(sql.SQL(""), spread=known)
         if len(rows) < size:
             method = "full table"
+        else:
+            method = "spread across the table" if known else "first rows"
 
     sample = Sample(rows=len(rows), method=method)
     sample.texts_present = 0 if text_field else None
