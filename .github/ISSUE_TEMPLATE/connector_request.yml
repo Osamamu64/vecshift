@@ -1,0 +1,33 @@
+name: Connector or provider request
+description: Ask for support for a vector store or embedding provider.
+labels: [connector]
+body:
+  - type: input
+    id: name
+    attributes:
+      label: Store or provider
+      placeholder: e.g. Milvus, Weaviate, Voyage AI
+    validations:
+      required: true
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind
+      options:
+        - Vector store (source)
+        - Vector store (target)
+        - Vector store (source and target)
+        - Embedding provider
+    validations:
+      required: true
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Your use case
+      description: Roughly how many vectors, and what you're trying to do.
+  - type: checkboxes
+    id: contribute
+    attributes:
+      label: Contribution
+      options:
+        - label: I'd be willing to help build or test this
