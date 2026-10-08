@@ -26,6 +26,8 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
+    "pydantic>=2.6",
+    "pyyaml>=6",
     "typer>=0.12",
 ]
 
@@ -56,6 +58,7 @@ dev = [
     "psycopg[binary]>=3.2",
     "numpy>=1.26",
     "httpx>=0.27",
+    "types-pyyaml>=6.0.12.20260906",
 ]
 
 [tool.hatch.version]
@@ -76,7 +79,15 @@ line-length = 100
 target-version = "py311"
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
+# S is flake8-bandit: security checks, enforced in CI.
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "S"]
+# random is only used for sampling and retry jitter, never for anything secret.
+ignore = ["S311"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests use assert, and fixed fake credentials for throwaway databases.
+"tests/**" = ["S101", "S105", "S106", "S608"]
+"scripts/**" = ["S101"]
 
 [tool.mypy]
 python_version = "3.11"

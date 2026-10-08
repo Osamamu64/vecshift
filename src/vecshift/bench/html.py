@@ -70,7 +70,8 @@ def _picks(models: list[ModelResult]) -> str:
             f'<div class="who">{e(m.name)}</div><div class="why">{e(why)}</div></div>'
         )
 
-    assert best.scores
+    if best.scores is None:  # pragma: no cover - scored models always have scores
+        return ""
     value_why = ""
     if value:
         cost = value.cost_per_million_docs

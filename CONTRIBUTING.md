@@ -30,6 +30,20 @@ uv run mypy                  # strict type checking
 uv run pytest                # tests
 ```
 
+### Security checks
+
+CI also runs these. Run them before changing dependencies or workflows:
+
+```bash
+uv export --frozen --all-extras --all-groups --no-hashes --no-emit-project -o /tmp/req.txt
+uvx pip-audit --strict -r /tmp/req.txt      # known vulnerabilities in dependencies
+uvx zizmor --offline .github/workflows/     # GitHub Actions security
+```
+
+Ruff's security rules (`S`) run as part of `uv run ruff check .`. Read
+[docs/security.md](docs/security.md) before touching credentials, SQL, HTML output, or
+anything that sends data off the machine; `tests/test_security.py` pins those properties.
+
 ### Integration tests
 
 Tests under `tests/integration` run against a real PostgreSQL with pgvector. They're skipped
@@ -52,6 +66,8 @@ src/vecshift/
   doctor/      # store-independent diagnosis: profile, checks, findings
   embeddings/  # model specs, providers, and the embedding cache
   bench/       # model benchmarking: corpus, queries, metrics, runner, leaderboard
+  jobs/        # the vecshift.yaml job spec
+  planning/    # turning a job into a plan: changes, estimates, findings
   connectors/  # one package per store, e.g. pgvector
   cli.py       # command-line interface
 tests/         # pytest suite

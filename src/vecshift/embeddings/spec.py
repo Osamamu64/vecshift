@@ -21,7 +21,8 @@ import re
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
-LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "0.0.0.0", "host.docker.internal"}
+# Hosts that keep traffic on this machine. ("0.0.0.0" is a destination here, not a bind.)
+LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "0.0.0.0", "host.docker.internal"}  # noqa: S104
 
 
 class SpecError(ValueError):
@@ -38,7 +39,9 @@ class Preset:
 PRESETS = {
     "openai": Preset("https://api.openai.com/v1", "OPENAI_API_KEY", "OpenAI"),
     "ollama": Preset("http://localhost:11434/v1", None, "Ollama on this machine"),
-    "compat": Preset(None, "VECSHIFT_API_KEY", "any OpenAI-compatible server"),
+    # No default key: a key is only sent to a compat server when key_env= names one, so
+    # pointing a spec at a new URL never hands it a key meant for another server.
+    "compat": Preset(None, None, "any OpenAI-compatible server"),
     "hash": Preset(None, None, "built-in hashing baseline, free and offline"),
 }
 
@@ -49,6 +52,21 @@ KNOWN_PRICES = {
     "text-embedding-3-large": 0.13,
     "text-embedding-ada-002": 0.10,
 }
+
+# Native output size of well-known models, so plans know the target column size without
+# calling the API. Matched on the model's base name, without any path prefix or tag.
+KNOWN_DIMENSIONS = {
+    "text-embedding-3-small": 1536,
+    "text-embedding-3-large": 3072,
+    "text-embedding-ada-002": 1536,
+    "nomic-embed-text": 768,
+    "mxbai-embed-large": 1024,
+    "bge-m3": 1024,
+    "all-minilm": 384,
+}
+
+# Models known to accept a smaller ``dimensions`` request (Matryoshka truncation).
+SUPPORTS_DIMENSIONS = {"text-embedding-3-small", "text-embedding-3-large"}
 
 _SEARCH_INSTRUCTION = "Represent this sentence for searching relevant passages: "
 
@@ -90,6 +108,32 @@ class ModelSpec:
             return True
         host = urlparse(self.url or "").hostname or ""
         return host in LOCAL_HOSTS
+
+    @property
+    def safe_raw(self) -> str:
+        """The spec as written, minus any URL query string, which can carry secrets."""
+        if not self.url or "?" not in self.url:
+            return self.raw
+        return self.raw.replace(self.url, self.url.split("?", 1)[0] + "?…")
+
+    @property
+    def sends_plaintext(self) -> bool:
+        """Whether requests would cross the network unencrypted."""
+        return (self.url or "").startswith("http://") and not self.is_local
+
+    @property
+    def base_model(self) -> str:
+        """``BAAI/bge-m3`` → ``bge-m3``; ``nomic-embed-text:latest`` → ``nomic-embed-text``."""
+        return self.model.rsplit("/", 1)[-1].split(":", 1)[0].lower()
+
+    @property
+    def native_dimensions(self) -> int | None:
+        return KNOWN_DIMENSIONS.get(self.base_model)
+
+    @property
+    def output_dimensions(self) -> int | None:
+        """What this spec will produce, if known without calling the model."""
+        return self.dimensions or self.native_dimensions
 
     @property
     def identity(self) -> str:
@@ -152,8 +196,14 @@ def parse_spec(raw: str) -> ModelSpec:
         )
     if url:
         url = url.rstrip("/")
-        if urlparse(url).scheme not in {"http", "https"}:
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"}:
             raise SpecError(f"url= must start with http:// or https://, got {url!r}")
+        if parsed.username or parsed.password:
+            raise SpecError(
+                "Don't put credentials in url=: they would end up in reports. Put the key in "
+                "an environment variable and name it with key_env=."
+            )
 
     dimensions = int(_number("dims", values["dims"], int)) if "dims" in values else None
     if provider == "hash":

@@ -54,3 +54,16 @@ def setup(db_dsn: str) -> Iterator[psycopg.Connection]:
     """An autocommit superuser connection for arranging test data."""
     with psycopg.connect(db_dsn, autocommit=True) as conn:
         yield conn
+
+
+@pytest.fixture
+def reader(db_dsn: str, setup: psycopg.Connection) -> Iterator[str]:
+    """A login role without BYPASSRLS, like a Supabase app role."""
+    role = f"reader_{uuid.uuid4().hex[:8]}"
+    setup.execute(f"CREATE ROLE {role} LOGIN PASSWORD 'reader'")
+    setup.execute(f"GRANT USAGE ON SCHEMA extensions TO {role}")
+    try:
+        yield make_conninfo("", **{**conninfo_to_dict(db_dsn), "user": role, "password": "reader"})
+    finally:
+        setup.execute(f"DROP OWNED BY {role}")
+        setup.execute(f"DROP ROLE {role}")

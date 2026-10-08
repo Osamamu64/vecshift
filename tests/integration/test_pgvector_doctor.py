@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 import json
-import uuid
-from collections.abc import Iterator
 
 import psycopg
 import pytest
-from psycopg.conninfo import conninfo_to_dict, make_conninfo
+from psycopg.conninfo import conninfo_to_dict
 from typer.testing import CliRunner
 
 from vecshift.cli import app
@@ -202,19 +200,6 @@ def test_large_table_is_sampled(db_dsn: str, setup: psycopg.Connection) -> None:
     assert profile.sample.method == "table sample"
     assert 250 <= profile.sample.rows <= 500
     assert profile.estimated_rows == 20_000
-
-
-@pytest.fixture
-def reader(db_dsn: str, setup: psycopg.Connection) -> Iterator[str]:
-    """A login role without BYPASSRLS, like a Supabase app role."""
-    role = f"reader_{uuid.uuid4().hex[:8]}"
-    setup.execute(f"CREATE ROLE {role} LOGIN PASSWORD 'reader'")
-    setup.execute(f"GRANT USAGE ON SCHEMA extensions TO {role}")
-    try:
-        yield make_conninfo("", **{**conninfo_to_dict(db_dsn), "user": role, "password": "reader"})
-    finally:
-        setup.execute(f"DROP OWNED BY {role}")
-        setup.execute(f"DROP ROLE {role}")
 
 
 def test_row_level_security(reader: str, setup: psycopg.Connection) -> None:

@@ -7,6 +7,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Security
+
+- API keys are never sent over unencrypted `http://` to remote hosts, redirects are never
+  followed, and credentials inside model URLs are rejected. URL query strings are hidden
+  wherever a spec is shown.
+- `compat` servers only receive an API key when the spec names one with `key_env=`.
+  Previously `VECSHIFT_API_KEY` was sent to any compat URL.
+- The embedding cache is now readable by its owner only (directory `0700`, file `0600`).
+- HTML reports carry a strict Content Security Policy: no network access, and only their
+  own script, pinned by hash, may run.
+- SQL generated for `apply` quotes identifiers using the server's keyword list.
+- Crash tracebacks never print local variables, and `--dsn` with a password on the
+  command line prints a warning.
+- CI runs `pip-audit`, `zizmor`, and Ruff's security rules on every change and weekly.
+  Actions are pinned to commit SHAs, and checkout no longer persists credentials.
+
 ### Fixed
 
 - `vecshift doctor` sampled only the start of large tables, so rows written later (often by a
@@ -14,6 +30,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `vecshift init` writes a commented `vecshift.yaml` job file describing a migration: the
+  source table, the side-by-side target column, the new model, and limits such as a budget.
+- `vecshift plan` checks a job against the database without changing anything. It shows
+  the SQL apply would run, estimates rows, tokens, cost, duration, storage, and index build
+  memory, and reports anything that would make the migration fail, exiting with status 1 on
+  errors. `--probe` measures the real model's size, token counts, and speed on 16 rows.
 - `vecshift bench` compares embedding models on a sample of your documents, from a JSONL
   file or a pgvector table. It reports recall@1, recall@10, MRR@10, query latency,
   throughput, cost per million documents, and storage, as a terminal table, `--json`, or an

@@ -24,8 +24,12 @@ def default_cache_path() -> Path:
 class EmbeddingCache:
     def __init__(self, path: Path | None = None) -> None:
         self.path = path or default_cache_path()
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        # Embeddings can be partly inverted back into text, so the cache is readable by
+        # its owner only, like ~/.ssh.
+        self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        os.chmod(self.path.parent, 0o700)
         self._db = sqlite3.connect(self.path)
+        os.chmod(self.path, 0o600)
         self._db.execute(
             "CREATE TABLE IF NOT EXISTS embeddings (key BLOB PRIMARY KEY, vector BLOB NOT NULL)"
         )
@@ -38,8 +42,9 @@ class EmbeddingCache:
         found: dict[bytes, list[float]] = {}
         for i in range(0, len(keys), 500):
             chunk = list(keys[i : i + 500])
+            placeholders = ",".join("?" * len(chunk))  # only "?" marks; values are bound
             rows = self._db.execute(
-                f"SELECT key, vector FROM embeddings WHERE key IN ({','.join('?' * len(chunk))})",
+                f"SELECT key, vector FROM embeddings WHERE key IN ({placeholders})",  # noqa: S608
                 chunk,
             ).fetchall()
             for key, blob in rows:

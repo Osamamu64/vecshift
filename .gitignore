@@ -30,3 +30,4 @@ htmlcov/
 .idea/
 .vscode/
 .DS_Store
+requirements-audit.txt

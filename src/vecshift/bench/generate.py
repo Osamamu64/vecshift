@@ -7,14 +7,13 @@ so a benchmark only pays for them once.
 from __future__ import annotations
 
 import asyncio
-import os
 import random
 from collections.abc import Sequence
 
 import httpx
 
 from vecshift.bench.corpus import Document, Query
-from vecshift.embeddings.providers import CONCURRENCY, MAX_ATTEMPTS, RETRY_STATUSES
+from vecshift.embeddings.providers import CONCURRENCY, MAX_ATTEMPTS, RETRY_STATUSES, api_key
 from vecshift.embeddings.spec import ModelSpec
 
 PROMPT = """Write one search query that a person might type to find the passage below.
@@ -33,13 +32,13 @@ class QueryGenerator:
     def __init__(self, spec: ModelSpec, client: httpx.AsyncClient | None = None) -> None:
         if spec.provider == "hash" or not spec.url:
             raise GenerationError("Query generation needs a chat model, such as openai/gpt-4o-mini")
-        key = os.environ.get(spec.key_env) if spec.key_env else None
-        if spec.provider == "openai" and not key:
-            raise GenerationError(f"Set {spec.key_env} to generate queries with {spec.name}")
+        key = api_key(spec, GenerationError)
         self.spec = spec
         self.tokens = 0
         headers = {"Authorization": f"Bearer {key}"} if key else {}
-        self._client = client or httpx.AsyncClient(timeout=120, headers=headers)
+        self._client = client or httpx.AsyncClient(
+            timeout=120, headers=headers, verify=True, follow_redirects=False
+        )
         if client is not None and key:
             self._client.headers.update(headers)
         self._owns_client = client is None

@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import json
-import shutil
-import textwrap
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated
@@ -12,11 +10,16 @@ from typing import Annotated
 import typer
 
 from vecshift import __version__
+from vecshift.cli_style import STYLE as _STYLE
+from vecshift.cli_style import warn_if_password_on_command_line
+from vecshift.cli_style import wrap as _wrap
 from vecshift.core.fingerprint import EmbeddingFingerprint
 from vecshift.doctor import Report, Severity, run_checks
 
 app = typer.Typer(
     name="vecshift",
+    # Tracebacks must never print local variables: they can hold connection strings and keys.
+    pretty_exceptions_show_locals=False,
     help="Safe, observable embedding migrations for any vector store.",
     no_args_is_help=True,
     add_completion=False,
@@ -79,22 +82,6 @@ class FailOn(StrEnum):
     ERROR = "error"
 
 
-_STYLE = {
-    Severity.ERROR: ("✖ ERROR  ", typer.colors.RED, "error"),
-    Severity.WARNING: ("⚠ WARNING", typer.colors.YELLOW, "warning"),
-    Severity.INFO: ("● INFO   ", typer.colors.BLUE, "info"),
-    Severity.OK: ("✔ OK     ", typer.colors.GREEN, "ok"),
-}
-
-
-_INDENT = " " * 11
-
-
-def _wrap(text: str) -> str:
-    width = min(100, shutil.get_terminal_size((100, 24)).columns)
-    return textwrap.fill(text, width=width, initial_indent=_INDENT, subsequent_indent=_INDENT)
-
-
 def _render(report: Report, connection: str) -> None:
     dims = f"({report.declared_dimensions})" if report.declared_dimensions else ""
     rows = f"~{report.estimated_rows:,}" if report.estimated_rows is not None else "unknown"
@@ -119,6 +106,7 @@ def _render(report: Report, connection: str) -> None:
 
 @app.command()
 def doctor(
+    ctx: typer.Context,
     dsn: Annotated[
         str,
         typer.Option(
@@ -156,6 +144,7 @@ def doctor(
     ] = FailOn.NEVER,
 ) -> None:
     """Inspect a pgvector index and report problems. Read-only."""
+    warn_if_password_on_command_line(ctx, dsn)
     try:
         from vecshift.connectors import pgvector
     except ImportError as exc:  # pragma: no cover - depends on installed extras
@@ -228,3 +217,8 @@ def doctor(
 from vecshift.cli_bench import bench  # noqa: E402
 
 app.command()(bench)
+
+from vecshift.cli_plan import init, plan  # noqa: E402
+
+app.command()(init)
+app.command()(plan)
