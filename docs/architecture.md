@@ -133,6 +133,22 @@ the source, the state of the target column, a sample of text lengths, and an opt
 of the model into a [`Plan`](../src/vecshift/planning/plan.py): the changes apply would
 make (with their SQL), estimates, and findings in the same form doctor uses.
 
+## Applying a migration
+
+[`vecshift.migrate`](../src/vecshift/migrate/engine.py) runs a migration through two small
+interfaces: a writer for the store (add the column and trigger, fetch rows that need a
+vector, write vectors back, build the index) and the embedding contract for the model. It
+reports progress as events, which the CLI renders as a progress line or JSON lines, and an
+API can stream the same way. The pgvector writer lives in
+[`connectors/pgvector/writer.py`](../src/vecshift/connectors/pgvector/writer.py).
+
+The database is the checkpoint: a row is done when its new vector is filled in, and a
+trigger clears it when the row's text changes. Vectors are written with a guard that the
+text is still what was embedded, so a run can stop, crash, or race application writes and
+still end with every vector matching its row's current text. A small
+[state file](../src/vecshift/migrate/state.py) keeps only what the database can't: spend
+across runs and rejected row IDs.
+
 ## Change capture
 
 Keeping a shadow index in sync with live writes depends on what the source offers:

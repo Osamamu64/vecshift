@@ -53,6 +53,8 @@ class Plan:
     dimensions_source: str | None
     """``spec``, ``known``, ``probe``, or ``None`` when unknown."""
     vector_type: str
+    metric: str = "cosine"
+    """Distance for the new index: the job's, the current index's, or cosine."""
     changes: list[Change] = field(default_factory=list)
     estimates: Estimates = field(default_factory=Estimates)
     findings: list[Finding] = field(default_factory=list)
@@ -78,6 +80,7 @@ class Plan:
             "dimensions": self.dimensions,
             "dimensions_source": self.dimensions_source,
             "vector_type": self.vector_type,
+            "metric": self.metric,
             "changes": [asdict(c) for c in self.changes],
             "estimates": asdict(self.estimates),
             "findings": [f.to_dict() for f in self.sorted_findings()],

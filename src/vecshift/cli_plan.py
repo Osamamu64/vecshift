@@ -9,6 +9,7 @@ import shutil
 import sys
 import textwrap
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated
 
@@ -17,7 +18,11 @@ import typer
 from vecshift.cli_style import finding_lines
 
 if TYPE_CHECKING:
+    from vecshift.connectors.pgvector import ConnectionSettings
+    from vecshift.connectors.pgvector.target import TargetState
+    from vecshift.doctor import IndexProfile
     from vecshift.embeddings import ModelSpec
+    from vecshift.jobs import JobSpec
     from vecshift.planning import Plan, ProbeResult
 
 DEFAULT_JOB = Path("vecshift.yaml")
@@ -102,7 +107,9 @@ def _note(text: str) -> str:
 def _money(value: float | None) -> str:
     if value is None:
         return "unknown"
-    return "<$0.01" if 0 < value < 0.01 else f"~${value:,.2f}"
+    if value == 0:
+        return "$0.00"
+    return "<$0.01" if value < 0.01 else f"~${value:,.2f}"
 
 
 def _render(plan: Plan) -> None:
@@ -119,7 +126,7 @@ def _render(plan: Plan) -> None:
     typer.echo(f"Model   {plan.model} → {dims} dimensions ({source_note})")
 
     typer.secho("\nChanges", bold=True)
-    marks = {"add_column": "+", "embed": "~", "index": "+", "cutover": "⇄"}
+    marks = {"add_column": "+", "trigger": "+", "embed": "~", "index": "+", "cutover": "⇄"}
     for change in plan.changes:
         typer.echo(f"  {marks.get(change.kind, '·')} {change.summary}")
         if change.sql:
@@ -188,24 +195,22 @@ async def _probe(spec: ModelSpec, texts: list[str]) -> ProbeResult:
     )
 
 
-def plan(
-    job_file: Annotated[
-        Path, typer.Argument(help="The job file.", show_default=True)
-    ] = DEFAULT_JOB,
-    probe: Annotated[
-        bool,
-        typer.Option(
-            help=f"Embed {PROBE_DOCUMENTS} sample rows with the real model to measure its "
-            "size, token counts, and speed."
-        ),
-    ] = False,
-    yes: Annotated[bool, typer.Option("--yes", "-y", help="Don't ask before probing.")] = False,
-    sample_size: Annotated[
-        int, typer.Option("--sample", min=50, max=100_000, help="Rows to sample.")
-    ] = 2000,
-    output_json: Annotated[bool, typer.Option("--json", help="Print the plan as JSON.")] = False,
-) -> None:
-    """Check a migration job and estimate it, without changing anything."""
+@dataclass(slots=True)
+class Prepared:
+    """Everything known about a job before anything changes."""
+
+    job: JobSpec
+    settings: ConnectionSettings
+    spec: ModelSpec
+    profile: IndexProfile
+    target: TargetState
+    plan: Plan
+
+
+def prepare(
+    job_file: Path, *, sample_size: int = 2000, probe: bool = False, yes: bool = False
+) -> Prepared:
+    """Load the job, inspect the database read-only, and build the plan."""
     from vecshift.connectors import pgvector
     from vecshift.connectors.pgvector.documents import sample_documents
     from vecshift.connectors.pgvector.target import inspect_target, resolve_source_column
@@ -284,6 +289,28 @@ def plan(
             raise _fail(f"The probe failed: {exc}") from exc
 
     result = build_plan(job, profile, target, stats, measured)
+    return Prepared(job, settings, spec, profile, target, result)
+
+
+def plan(
+    job_file: Annotated[
+        Path, typer.Argument(help="The job file.", show_default=True)
+    ] = DEFAULT_JOB,
+    probe: Annotated[
+        bool,
+        typer.Option(
+            help=f"Embed {PROBE_DOCUMENTS} sample rows with the real model to measure its "
+            "size, token counts, and speed."
+        ),
+    ] = False,
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="Don't ask before probing.")] = False,
+    sample_size: Annotated[
+        int, typer.Option("--sample", min=50, max=100_000, help="Rows to sample.")
+    ] = 2000,
+    output_json: Annotated[bool, typer.Option("--json", help="Print the plan as JSON.")] = False,
+) -> None:
+    """Check a migration job and estimate it, without changing anything."""
+    result = prepare(job_file, sample_size=sample_size, probe=probe, yes=yes).plan
     if output_json:
         typer.echo(json.dumps(result.to_dict(), indent=2))
     else:

@@ -158,3 +158,93 @@ def test_json_reports_hold_no_password() -> None:
     assert "hunter2" not in result.output
     with pytest.raises(json.JSONDecodeError):
         json.loads(result.stdout or "x")  # connection failed: nothing (secret or not) on stdout
+
+
+def test_sql_is_never_built_with_string_formatting() -> None:
+    """Statements are composed with psycopg.sql and bound parameters, never f-strings."""
+    import ast
+
+    import vecshift
+
+    reviewed = {
+        "cache.py": "a run of '?' placeholders; the values are bound",
+        "writer.py": "a random hex dollar-quote tag for the trigger function body",
+    }
+    offenders = []
+    for path in Path(vecshift.__file__).parent.rglob("*.py"):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if not (isinstance(node, ast.Call) and node.args):
+                continue
+            name = getattr(node.func, "attr", getattr(node.func, "id", ""))
+            first = node.args[0]
+            formatted = isinstance(first, ast.JoinedStr) or (
+                isinstance(first, ast.BinOp) and isinstance(first.op, ast.Mod | ast.Add)
+            )
+            if name in {"execute", "executemany", "SQL"} and formatted:
+                offenders.append(path.name)
+    assert sorted(offenders) == sorted(reviewed), "review new string-built SQL"
+
+
+# --- Apply
+
+
+def test_apply_asks_before_changing_anything(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without --yes, apply needs a person at a terminal before it writes or sends text."""
+    from types import SimpleNamespace
+
+    import vecshift.cli_apply as cli_apply
+    from vecshift.connectors import pgvector
+    from vecshift.planning.plan import Estimates
+
+    ready = SimpleNamespace(
+        plan=SimpleNamespace(
+            ok=True,
+            dimensions=8,
+            findings=[],
+            changes=[],
+            estimates=Estimates(),
+            source="public.documents (embedding)",
+            metric="cosine",
+        ),
+        job=SimpleNamespace(name="docs", limits=SimpleNamespace(budget_usd=None)),
+        spec=SimpleNamespace(price=None, is_local=False, url="https://api.example.com/v1"),
+        target=SimpleNamespace(primary_key=("id",)),
+        profile=SimpleNamespace(text_field="content"),
+    )
+    monkeypatch.setattr(cli_apply, "prepare", lambda job_file: ready)
+
+    def connect(settings: object) -> None:
+        raise AssertionError("connected without confirmation")
+
+    monkeypatch.setattr(pgvector, "connect_writer", connect)
+    result = CliRunner().invoke(app, ["apply", "j.yaml"])
+    assert result.exit_code == 2 and "--yes" in result.output
+    assert "sends row text to https://api.example.com/v1" in result.output
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX permissions")
+def test_apply_state_is_private_and_holds_no_text(tmp_path: Path) -> None:
+    import asyncio
+
+    from tests.test_migrate import FakeModel, FakeTable
+    from vecshift.migrate import JobState, apply
+
+    table = FakeTable(5)
+    table.rows[3][0] = "patient 4471 diagnosis"
+    state = JobState.for_job(tmp_path / "j.yaml", "docs")
+    asyncio.run(
+        apply(
+            table,
+            FakeModel(reject="patient"),
+            state,
+            dims=4,
+            price_per_million=1.0,
+            budget_usd=None,
+            chunk_rows=10,
+            index=None,
+        )
+    )
+    assert state.failed, "the rejected row is recorded by ID"
+    assert stat.S_IMODE(state.path.stat().st_mode) == 0o600
+    assert stat.S_IMODE(state.path.parent.stat().st_mode) == 0o700
+    assert "patient" not in state.path.read_text() and "text " not in state.path.read_text()

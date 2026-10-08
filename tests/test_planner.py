@@ -65,8 +65,8 @@ def ids(p: Any) -> dict[str, Severity]:
 def test_happy_path() -> None:
     p = plan_for()
     assert p.ok and p.dimensions == 768 and p.dimensions_source == "known"
-    assert [c.kind for c in p.changes] == ["add_column", "embed", "index", "cutover"]
-    add, _, index, _ = p.changes
+    assert [c.kind for c in p.changes] == ["add_column", "trigger", "embed", "index", "cutover"]
+    add, _, _, index, _ = p.changes
     assert add.sql == (
         "ALTER TABLE public.documents ADD COLUMN embedding_v2 extensions.vector(768);"
     )
@@ -172,13 +172,26 @@ def test_metric_and_ivfflat() -> None:
     assert "vector_l2_ops" in (next(c for c in explicit.changes if c.kind == "index").sql or "")
 
 
-def test_carries_doctor_sync_findings() -> None:
-    found = ids(plan_for(updated_at_field=None))
-    assert found["sync.none"] is Severity.WARNING
+def test_no_updated_at_needed() -> None:
+    """The sync trigger tracks changes, so a table without updated_at is fine to migrate."""
+    p = plan_for(updated_at_field=None, logical_replication=False)
+    assert p.ok and not any(f.id.startswith("sync.") for f in p.findings)
+
+
+def test_composite_primary_key() -> None:
+    found = ids(plan_for(t=target(primary_key=("tenant_id", "id"))))
+    assert found["plan.composite_primary_key"] is Severity.ERROR
+    assert "plan.composite_primary_key" not in ids(plan_for(t=target(primary_key=("id",))))
 
 
 def test_json_shape() -> None:
     data = plan_for().to_dict()
     assert data["ok"] is True and data["dimensions"] == 768
-    assert {c["kind"] for c in data["changes"]} == {"add_column", "embed", "index", "cutover"}
+    assert {c["kind"] for c in data["changes"]} == {
+        "add_column",
+        "trigger",
+        "embed",
+        "index",
+        "cutover",
+    }
     assert data["estimates"]["rows"] == 10_000
