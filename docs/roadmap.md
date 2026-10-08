@@ -46,12 +46,14 @@ Read-only tools. No writes to your stores, no production risk.
 - [x] `vecshift init` and the `vecshift.yaml` job file
 - [x] `vecshift plan`: validate the job against the database and estimate tokens, cost, time,
   and storage, with an optional `--probe` of the real model
-- `vecshift apply`: re-embed into a shadow index or named vector
-  - checkpoints and resume
-  - idempotent upserts guarded by `updated_at`
-  - dead-letter queue with `vecshift dlq retry`
-  - adaptive rate limiting that backs off on 429s and rising latency
-  - a hard spend cap that stops the run before it exceeds budget
+- [x] `vecshift apply` for pgvector and Supabase: re-embed into a side-by-side column
+  - [x] resume from the database itself, with no row embedded twice
+  - [x] a trigger and guarded writes that keep up with edits made during the run
+  - [x] rejected rows isolated and retried on the next run
+  - [x] a spend cap across runs that stops before the budget is passed
+  - [x] concurrent index build, with lock timeouts that never block the application
+  - [ ] adaptive rate limiting that backs off on rising latency, not only on 429s
+  - [ ] a named vector in Qdrant
 - `vecshift eval`: compare old and new indexes on overlap and recall@k, with a go/no-go report
 - `vecshift cutover` and `vecshift rollback` through alias swap
 - Connectors gain write support; `copy` mode for moving vectors without re-embedding

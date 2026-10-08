@@ -12,8 +12,8 @@
 ![Status: pre-alpha](https://img.shields.io/badge/status-pre--alpha-orange)
 
 > [!WARNING]
-> VecShift is in early development. `doctor`, `bench`, and `plan` work today; `apply` and
-> `cutover` are next. Watch the repo or read the [roadmap](docs/roadmap.md) to
+> VecShift is in early development. `doctor`, `bench`, `plan`, and `apply` work today;
+> `cutover` is next. Watch the repo or read the [roadmap](docs/roadmap.md) to
 > follow along.
 
 ---
@@ -39,7 +39,7 @@ VecShift answers those first, then makes the migration itself safe and repeatabl
 | `vecshift doctor` | Inspect an index: mixed models or sizes, zero and unnormalized vectors, duplicates, missing text, indexing and change-tracking gaps | ✅ pgvector and Supabase |
 | `vecshift bench` | Compare embedding models on a sample of *your* data: recall, latency, cost, storage | ✅ Available |
 | `vecshift init` / `plan` | Write a migration job, then check it and estimate tokens, cost, time, and storage | ✅ Available |
-| `vecshift apply` | Re-embed into a shadow index with checkpoints, resume, and rate limiting | 📋 Planned |
+| `vecshift apply` | Re-embed into a side-by-side column with resume, a spend cap, live-write sync, and a concurrent index build | ✅ pgvector and Supabase |
 | `vecshift eval` | Compare old and new indexes and produce a go/no-go report | 📋 Planned |
 | `vecshift cutover` / `rollback` | Alias swap with instant rollback | 📋 Planned |
 
@@ -129,7 +129,18 @@ uv run vecshift plan
 
 `init` writes a commented `vecshift.yaml`. `plan` checks it against the database without
 changing anything: the SQL it would run, rows, tokens, cost, duration, and storage, plus
-anything that would make the migration fail. See [Planning a migration](docs/migrations.md).
+anything that would make the migration fail.
+
+### Run it
+
+```bash
+uv run vecshift apply
+```
+
+`apply` adds the new column next to the old one, embeds every row, and builds the index
+concurrently, while your application keeps reading and writing. It stops cleanly on
+Ctrl-C or at your budget, and running it again resumes, or catches up on rows edited since.
+See [Planning and running a migration](docs/migrations.md).
 
 ### Fingerprint an embedding configuration
 
@@ -145,7 +156,7 @@ produces a different tag, because it's a different vector space.
 
 ## Documentation
 
-- [Planning a migration](docs/migrations.md): the job file, what plan checks, and its estimates
+- [Planning and running a migration](docs/migrations.md): the job file, `plan`, and `apply`
 - [Benchmarking embedding models](docs/bench.md): sources, model specs, query types, and metrics
 - [pgvector and Supabase](docs/connectors/pgvector.md): connecting, what `doctor` checks, and safety
 - [Architecture](docs/architecture.md): the canonical record, plugin contracts, and capability flags

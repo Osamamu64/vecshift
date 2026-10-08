@@ -30,6 +30,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `vecshift apply` runs a migration on pgvector and Supabase: it adds the new column and a
+  trigger that clears a row's new vector when its text changes, embeds every row in
+  resumable batches, makes catch-up passes for rows edited during the run, then builds the
+  index concurrently and checks every vector's size. Writes are guarded so a vector only
+  lands if the row's text is unchanged. It stops cleanly on Ctrl-C or before passing
+  `limits.budget_usd` (counted across runs), isolates rows the provider rejects, and
+  `--json` streams progress as JSON lines. Exit status 3 means "stopped; run again".
+- `plan` now lists the sync trigger among the changes, and reports tables with a
+  composite primary key, which `apply` doesn't support yet.
+
 - `vecshift init` writes a commented `vecshift.yaml` job file describing a migration: the
   source table, the side-by-side target column, the new model, and limits such as a budget.
 - `vecshift plan` checks a job against the database without changing anything. It shows

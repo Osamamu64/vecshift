@@ -72,3 +72,12 @@ def test_pooler_user_hint() -> None:
     settings = prepare("postgresql://postgres@aws-0-x.pooler.supabase.com:6543/postgres")
     hint = _hint_for(settings, 'FATAL: password authentication failed for user "postgres"')
     assert hint is not None and "postgres.<project-ref>" in hint
+
+
+def test_apply_refuses_the_transaction_pooler() -> None:
+    from vecshift.connectors.pgvector import ConnectError, connect_writer
+
+    settings = prepare(f"postgresql://postgres.abc:{SECRET}@aws-0-x.pooler.supabase.com:6543/db")
+    with pytest.raises(ConnectError, match="transaction pooler") as info:
+        connect_writer(settings)
+    assert SECRET not in str(info.value) and "session pooler" in (info.value.hint or "")

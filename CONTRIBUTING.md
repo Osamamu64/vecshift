@@ -68,6 +68,7 @@ src/vecshift/
   bench/       # model benchmarking: corpus, queries, metrics, runner, leaderboard
   jobs/        # the vecshift.yaml job spec
   planning/    # turning a job into a plan: changes, estimates, findings
+  migrate/     # the apply loop and its state file, independent of any store
   connectors/  # one package per store, e.g. pgvector
   cli.py       # command-line interface
 tests/         # pytest suite

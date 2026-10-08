@@ -21,7 +21,9 @@ HNSW_BYTES_PER_ELEMENT = 200
 """Rough per-row overhead of an HNSW graph (m=16) on top of the vector itself."""
 
 # Doctor findings that matter for a migration, carried into the plan unchanged.
-CARRIED = {"sync.none", "sync.updated_at", "sync.logical_replication", "access.row_security"}
+# Apply keeps the new column in sync with a trigger, so doctor's change-tracking findings
+# don't apply; row-level security still matters.
+CARRIED = {"access.row_security"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,6 +126,7 @@ def build_plan(
         dimensions=dims,
         dimensions_source=dims_source,
         vector_type=vector_type,
+        metric=metric,
     )
 
     # --- The source has to be re-embeddable and addressable.
@@ -161,6 +164,18 @@ def build_plan(
                 "Apply writes each new vector back to its row and resumes after "
                 "interruptions, which needs a stable ID per row.",
                 hint="Add a primary key to the table first.",
+            )
+        )
+
+    if profile.has_primary_key and len(target.primary_key) > 1:
+        findings.append(
+            Finding(
+                "plan.composite_primary_key",
+                Severity.ERROR,
+                "Composite primary key",
+                f"The primary key spans {', '.join(target.primary_key)}. Apply writes each "
+                "vector back by a single ID column.",
+                hint="Add a single-column unique ID, or migrate a view-free copy of the table.",
             )
         )
 
@@ -375,12 +390,22 @@ def build_plan(
                 "rewrite rows. It takes a brief exclusive lock.",
             )
         )
+    if profile.text_field:
+        plan.changes.append(
+            Change(
+                "trigger",
+                f"add a trigger that clears {job.target.column} when {profile.text_field} changes",
+                note="So rows edited during the migration get re-embedded. Cutover and rollback "
+                "remove it.",
+            )
+        )
     rows_text = f"~{est.rows:,}" if est.rows is not None else "all"
     plan.changes.append(
         Change(
             "embed",
             f"embed {rows_text} rows from {profile.text_field or '?'} with {spec.name}",
-            note="In batches, resumable, without blocking reads or writes.",
+            note="In batches, resumable, without blocking reads or writes. Run apply again "
+            "any time to catch up rows added or changed since.",
         )
     )
     if job.target.index is not IndexMethod.NONE and dims:

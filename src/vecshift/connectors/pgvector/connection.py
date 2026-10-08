@@ -135,3 +135,21 @@ def connect(settings: ConnectionSettings, statement_timeout_s: int = 60) -> psyc
         sql.SQL("SET LOCAL statement_timeout = {}").format(sql.Literal(statement_timeout_s * 1000))
     )
     return conn
+
+
+def connect_writer(settings: ConnectionSettings) -> psycopg.Connection:
+    """An autocommit connection for apply, which manages its own short transactions.
+
+    Apply holds a session-level advisory lock and builds indexes concurrently, so it needs a
+    real session: a transaction pooler won't do.
+    """
+    if settings.supabase is SupabaseMode.TRANSACTION_POOLER:
+        raise ConnectError(
+            "apply can't run through a transaction pooler.",
+            hint="Use the session pooler (port 5432) or the direct connection string.",
+        )
+    try:
+        return psycopg.connect(settings.conninfo, prepare_threshold=None, autocommit=True)
+    except psycopg.OperationalError as exc:
+        message = str(exc).strip().splitlines()[0] if str(exc).strip() else "Connection failed."
+        raise ConnectError(message, hint=_hint_for(settings, str(exc))) from exc

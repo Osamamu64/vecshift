@@ -13,6 +13,7 @@ and how it protects credentials. To report a vulnerability, see
 | `plan` | Nothing, unless you pass `--probe`, which sends 16 sample rows. | The model's API, after you confirm |
 | `bench` | The sampled documents and queries | Each model's API, after you confirm |
 | `bench --generate-queries` | The sampled documents | The chat model's API, after you confirm |
+| `apply` | Every row's text | The new model's API, after you confirm |
 
 - Before any text goes to a remote API, vecshift says how much and to where, and asks.
   `--yes` skips the question. Without a terminal it refuses unless `--yes` is given.
@@ -42,6 +43,13 @@ and how it protects credentials. To report a vulnerability, see
 
 - `doctor`, `bench`, and `plan` connect read-only, so the database rejects any write, and
   every statement runs under a timeout.
+- `apply` is the only command that writes. It shows what it will change and asks first
+  (`--yes` skips the question; without a terminal it refuses unless `--yes` is given). It
+  only adds things: a column, a trigger and its function, and an index. It never drops or
+  rewrites existing columns, and its row writes touch only the new column.
+- Schema changes wait at most a few seconds for a lock and then back off, so `apply` never
+  queues behind application queries and blocks them. A session advisory lock stops two
+  runs from working on the same column at once.
 - Large tables are sampled by page (`TABLESAMPLE SYSTEM`) instead of scanned.
 - Every query uses bound parameters, or identifiers composed with `psycopg.sql`. The SQL
   that `plan` shows for `apply` quotes identifiers using the server's own keyword list, so
@@ -50,7 +58,8 @@ and how it protects credentials. To report a vulnerability, see
   hides rows.
 - Use a role with only the access a command needs. `doctor`, `bench`, and `plan` need
   read access; [docs/connectors/pgvector.md](connectors/pgvector.md) has a read-only role
-  recipe.
+  recipe. `apply` needs to own the table; see
+  [Permissions](migrations.md#permissions).
 
 ## Data kept on disk
 
@@ -59,6 +68,10 @@ and how it protects credentials. To report a vulnerability, see
   itself isn't stored. Because embeddings can be partly inverted back into text, the
   directory is created readable by its owner only (`0700`) and the file `0600`. Delete
   the directory to clear it, or pass `--no-cache`.
+- **Migration state**: `.vecshift/<job>.state.json` next to the job file holds spend,
+  token and row counts, and the IDs of rows the provider rejected, with the provider's
+  error. Never row text or credentials. The directory is `0700` and the file `0600`, and
+  it is replaced atomically so a crash can't leave it half-written.
 - **Files you ask for**: reports and saved queries are written only where you point them.
   Saved generated queries contain the query text and document IDs.
 

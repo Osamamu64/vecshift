@@ -222,3 +222,7 @@ from vecshift.cli_plan import init, plan  # noqa: E402
 
 app.command()(init)
 app.command()(plan)
+
+from vecshift.cli_apply import apply  # noqa: E402
+
+app.command()(apply)

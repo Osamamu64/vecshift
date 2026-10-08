@@ -55,6 +55,9 @@ class TargetState:
     """Bytes available to an index build before it slows down."""
     keywords: frozenset[str] = FALLBACK_KEYWORDS
     """Words this server needs quoted when used as names."""
+    primary_key: tuple[str, ...] = ()
+    """Primary key columns, in order. Apply needs exactly one."""
+    text_column: str | None = None
 
     def q(self, name: str) -> str:
         return quote_ident(name, self.keywords)
@@ -81,6 +84,16 @@ def inspect_target(
         "SELECT setting::bigint, unit FROM pg_settings WHERE name = 'maintenance_work_mem'"
     ).fetchone()
     words = conn.execute("SELECT word FROM pg_get_keywords() WHERE catcode <> 'U'").fetchall()
+    pk_rows = conn.execute(
+        """
+        SELECT a.attname FROM pg_index i
+        CROSS JOIN LATERAL unnest(i.indkey::int2[]) WITH ORDINALITY AS k(attnum, ord)
+        JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum
+        WHERE i.indrelid = %s AND i.indisprimary
+        ORDER BY k.ord
+        """,
+        (source.relid,),
+    ).fetchall()
     units = {"kB": 1024, "MB": 1024**2, "8kB": 8192, "B": 1}
     mem_bytes = int(mem[0]) * units.get(mem[1] or "kB", 1024) if mem else 64 * 1024**2
     return TargetState(
@@ -92,6 +105,7 @@ def inspect_target(
         column_dimensions=int(col[1]) if col and col[1] > 0 else None,
         maintenance_work_mem=mem_bytes,
         keywords=frozenset(w[0] for w in words) or FALLBACK_KEYWORDS,
+        primary_key=tuple(str(r[0]) for r in pk_rows),
     )
 
 
