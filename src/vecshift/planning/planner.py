@@ -191,6 +191,17 @@ def build_plan(
                 hint="Connect as the table owner. On Supabase that's usually postgres.",
             )
         )
+    if target.previous_column_exists and not target.column_exists:
+        findings.append(
+            Finding(
+                "plan.cut_over",
+                Severity.ERROR,
+                "This table was already cut over",
+                f"`{target.source.column}_old` holds the vectors from before the last cutover.",
+                hint="Run vecshift rollback to undo it, or vecshift cleanup when you're sure, "
+                "before starting another migration.",
+            )
+        )
     if target.column_exists:
         same = target.column_type == vector_type and (
             dims is None or target.column_dimensions == dims

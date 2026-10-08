@@ -52,12 +52,29 @@ Read-only tools. No writes to your stores, no production risk.
   - [x] rejected rows isolated and retried on the next run
   - [x] a spend cap across runs that stops before the budget is passed
   - [x] concurrent index build, with lock timeouts that never block the application
+  - [x] `--until PERCENT` to stop part way, check, and continue
   - [ ] adaptive rate limiting that backs off on rising latency, not only on 429s
-  - [ ] a named vector in Qdrant
-- `vecshift eval`: compare old and new indexes on overlap and recall@k, with a go/no-go report
-- `vecshift cutover` and `vecshift rollback` through alias swap
-- Connectors gain write support; `copy` mode for moving vectors without re-embedding
+- [x] `vecshift cutover`, `rollback`, and `cleanup` for pgvector and Supabase: the new
+  vectors take the column name the application already uses, in one transaction
+- `vecshift eval`: compare old and new vectors on overlap and recall@k, with a go/no-go
+  report, including on a partial (`--until`) migration
 - Docker image and a docker-compose demo
+
+### Two kinds of migration
+
+Every connector will support both, behind the same commands:
+
+- **Within a store**: a new model, side by side in the same database, then an atomic
+  switch. pgvector renames columns; OpenSearch, Elasticsearch, Qdrant, and Milvus build a
+  new index or collection and move an alias, since they can't change a vector field in
+  place.
+- **To another store**: for example pgvector to Qdrant. Pick the source table or index and
+  vecshift creates the target's schema (fields, metadata, vector size, and metric), then
+  copies and embeds in one pass. Re-embedding is optional, so it can also move existing
+  vectors as they are.
+
+Stores without aliases (such as Pinecone) need a one-line application config change at
+cutover; `doctor` will say so up front, along with whether an alias exists for rollback.
 
 ## Phase 3: Stay in sync, stay honest
 

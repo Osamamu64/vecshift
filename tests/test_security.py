@@ -248,3 +248,38 @@ def test_apply_state_is_private_and_holds_no_text(tmp_path: Path) -> None:
     assert stat.S_IMODE(state.path.stat().st_mode) == 0o600
     assert stat.S_IMODE(state.path.parent.stat().st_mode) == 0o700
     assert "patient" not in state.path.read_text() and "text " not in state.path.read_text()
+
+
+def test_trigger_functions_pin_their_search_path() -> None:
+    """vecshift's trigger functions can't be redirected by objects in other schemas."""
+    from unittest.mock import MagicMock
+
+    from vecshift.connectors.pgvector.writer import Layout, PgWriter
+
+    conn = MagicMock(autocommit=True)
+    lay = Layout("public", "docs", "id", "content", "embedding_v2", "vector", 8, "extensions")
+    text = PgWriter(conn, lay).sync_function_sql().as_string()
+    assert 'SET search_path = pg_catalog, "extensions"' in text
+    assert text.count("$vs_") == 2, "the body is dollar-quoted with a random tag"
+
+
+@pytest.mark.parametrize(
+    ("command", "changes"),
+    [
+        ("cutover", ["_catch_up(", "switch.cutover("]),
+        ("rollback", ["switch.rollback("]),
+        ("cleanup", ["switch.cleanup("]),
+    ],
+)
+def test_switching_asks_before_changing_or_sending(command: str, changes: list[str]) -> None:
+    """cutover, rollback, and cleanup confirm before embedding text or touching the table.
+
+    The integration tests check that, without --yes, nothing changes.
+    """
+    import vecshift.cli_cutover as cli_cutover
+
+    source = Path(cli_cutover.__file__).read_text(encoding="utf-8")
+    run = source.split(f"def {command}(", 1)[1].split("def run(", 1)[1]
+    asks = run.index("_confirm(") if "_confirm(" in run else run.index("typer.prompt(")
+    for change in changes:
+        assert asks < run.index(change)
