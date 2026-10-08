@@ -4,7 +4,11 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    # Weekly, so newly published vulnerabilities in dependencies are caught between commits.
+    - cron: "17 6 * * 1"
 
+# Least privilege: jobs can read the repository and nothing else.
 permissions:
   contents: read
 
@@ -12,13 +16,19 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Actions are pinned to full commit SHAs so a moved or compromised tag can't change what
+# runs here. Dependabot keeps the pins (and the version comments) up to date.
+
 jobs:
   lint:
     name: Lint and type check
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
       - run: uv sync --locked
       - run: uv run ruff check .
       - run: uv run ruff format --check .
@@ -27,6 +37,7 @@ jobs:
   test:
     name: Test (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -34,14 +45,17 @@ jobs:
     env:
       UV_PYTHON: ${{ matrix.python-version }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
       - run: uv sync --locked
       - run: uv run pytest --cov=vecshift --cov-report=term-missing
 
   integration:
     name: Integration (PostgreSQL ${{ matrix.postgres }} + pgvector)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -50,6 +64,7 @@ jobs:
       postgres:
         image: pgvector/pgvector:pg${{ matrix.postgres }}
         env:
+          # A throwaway database that exists only for this job.
           POSTGRES_PASSWORD: postgres
         ports:
           - 5432:5432
@@ -61,7 +76,25 @@ jobs:
     env:
       VECSHIFT_TEST_PG_DSN: postgresql://postgres:postgres@localhost:5432/postgres
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
       - run: uv sync --locked
       - run: uv run pytest tests/integration
+
+  security:
+    name: Security audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+      - name: Known vulnerabilities in locked dependencies
+        run: |
+          uv export --frozen --all-extras --all-groups --no-hashes --no-emit-project -o requirements-audit.txt
+          uvx pip-audit==2.10.1 --strict -r requirements-audit.txt
+      - name: GitHub Actions workflow security
+        run: uvx zizmor==1.30.1 --offline .github/workflows/

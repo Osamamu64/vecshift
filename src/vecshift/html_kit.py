@@ -3,6 +3,8 @@ favicon, styles, script, escaping, and number formatting."""
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import math
 import re
 from datetime import UTC, datetime
@@ -86,6 +88,19 @@ def stamp(when: datetime | None = None) -> str:
     return f"{moment.day} {moment:%b %Y, %H:%M} UTC"
 
 
+def content_security_policy(script: str) -> str:
+    """Allow only this page's own script (by hash) and inline styles, and no network at all.
+
+    Even if an escaping bug ever let data inject markup, the browser would refuse to run
+    any other script or send anything anywhere.
+    """
+    digest = base64.b64encode(hashlib.sha256(script.encode()).digest()).decode()
+    return (
+        "default-src 'none'; img-src data:; style-src 'unsafe-inline'; "
+        f"script-src 'sha256-{digest}'; base-uri 'none'; form-action 'none'"
+    )
+
+
 def page(
     *,
     title: str,
@@ -99,10 +114,13 @@ def page(
 ) -> str:
     """A complete, self-contained HTML document in vecshift's report style."""
     meta_html = "".join(f"<span>{e(m)}</span>" for m in meta)
+    script = asset("report.js")
     return f"""<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="{content_security_policy(script)}">
+<meta name="referrer" content="no-referrer">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="generator" content="{e(generator)}">
 <link rel="icon" href="{FAVICON}">
@@ -119,7 +137,7 @@ def page(
 {body}
 <footer>{footer}</footer>
 </main>
-<script>{asset("report.js")}</script>
+<script>{script}</script>
 </body>
 </html>
 """

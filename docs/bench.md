@@ -34,7 +34,7 @@ Each `-m` is a model spec: `provider/model`, optionally followed by `,option=val
 |---|---|---|
 | `openai` | OpenAI's API | `OPENAI_API_KEY` |
 | `ollama` | Ollama on this machine (`http://localhost:11434/v1`) | none |
-| `compat` | Any OpenAI-compatible server: vLLM, TEI, LM Studio, LiteLLM, hosted platforms. Needs `url=`. | `VECSHIFT_API_KEY`, if set |
+| `compat` | Any OpenAI-compatible server: vLLM, TEI, LM Studio, LiteLLM, hosted platforms. Needs `url=`. | Only the variable named by `key_env=` |
 | `hash` | Built-in hashing baseline. The model is the dimension count, e.g. `hash/1024`. | none |
 
 | Option | Meaning |
@@ -116,6 +116,8 @@ not an ANN index.
 - **Retries are built in.** Requests that hit rate limits or server errors are retried with
   backoff, respecting `Retry-After`.
 - **API keys are only read from the environment** and never appear in output or errors.
+  A key is never sent over plain `http://` to a remote host, redirects aren't followed,
+  and credentials inside `url=` are rejected. See the [security model](security.md).
 
 ## Output
 

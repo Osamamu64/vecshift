@@ -112,7 +112,10 @@ def _percentile(values: Sequence[float], pct: float) -> float:
 
 async def _run_one(bench: Benchmark, spec: ModelSpec, cache: EmbeddingCache | None) -> ModelResult:
     result = ModelResult(
-        name=spec.name, spec=spec.raw, price_per_million_tokens=spec.price, local=spec.is_local
+        name=spec.name,
+        spec=spec.safe_raw,
+        price_per_million_tokens=spec.price,
+        local=spec.is_local,
     )
     embedder = create_embedder(spec)
     use_cache = cache is not None and spec.provider != "hash"

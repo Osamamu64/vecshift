@@ -130,3 +130,20 @@ def test_missing_dsn_and_job(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     assert missing.exit_code == 2 and "vecshift init" in missing.output
     no_dsn = runner.invoke(app, ["plan", str(job_file(tmp_path))])
     assert no_dsn.exit_code == 2 and "VECSHIFT_DSN isn't set" in no_dsn.output
+
+
+def test_generated_sql_quotes_keywords(
+    db_dsn: str, setup: psycopg.Connection, tmp_path: Path
+) -> None:
+    """A target column named after an SQL keyword must still produce runnable SQL."""
+    create_healthy(setup, rows=20)
+    path = job_file(tmp_path, **{'column: "embedding_v2"': 'column: "order"'})
+    _, data = plan(path, db_dsn)
+    statements = [c["sql"] for c in data["changes"] if c["sql"]]
+    assert statements and all('"order"' in s for s in statements)
+    for statement in statements:
+        setup.execute(statement)
+    assert setup.execute(
+        "SELECT count(*) FROM pg_attribute WHERE attrelid = 'public.documents'::regclass "
+        "AND attname = 'order'"
+    ).fetchone() == (1,)

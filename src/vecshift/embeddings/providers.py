@@ -34,6 +34,22 @@ class EmbeddingError(Exception):
     """A provider call failed for good. The message never contains credentials."""
 
 
+def api_key(spec: ModelSpec, error: type[Exception]) -> str | None:
+    """The API key for ``spec``, after checking it can be sent safely."""
+    key = os.environ.get(spec.key_env) if spec.key_env else None
+    if spec.provider == "openai" and not key:
+        raise error(
+            f"{spec.name}: set {spec.key_env} to your OpenAI API key "
+            "(or key_env=NAME in the spec to read it from another variable)"
+        )
+    if key and spec.sends_plaintext:
+        raise error(
+            f"{spec.name}: refusing to send an API key over unencrypted http:// to a remote "
+            "host. Use an https:// URL."
+        )
+    return key
+
+
 class _Base:
     def __init__(self, spec: ModelSpec) -> None:
         self.spec = spec
@@ -81,7 +97,8 @@ class HashingEmbedder(_Base):
 
     def __init__(self, spec: ModelSpec) -> None:
         super().__init__(spec)
-        assert spec.dimensions
+        if not spec.dimensions:
+            raise EmbeddingError(f"{spec.name}: hash models need a size, e.g. hash/512")
         self._dims = spec.dimensions
 
     def _vector(self, text: str) -> list[float]:
@@ -121,15 +138,15 @@ class OpenAICompatEmbedder(_Base):
         super().__init__(spec)
         if not spec.url:
             raise EmbeddingError(f"{spec.name}: no URL configured")
-        key = os.environ.get(spec.key_env) if spec.key_env else None
-        if spec.provider == "openai" and not key:
-            raise EmbeddingError(
-                f"{spec.name}: set {spec.key_env} to your OpenAI API key "
-                "(or key_env=NAME in the spec to read it from another variable)"
-            )
+        key = api_key(spec, EmbeddingError)
         headers = {"Authorization": f"Bearer {key}"} if key else {}
+        # TLS certificates are always verified, and redirects are never followed, so a
+        # key can't be carried to a host other than the one in the spec.
         self._client = client or httpx.AsyncClient(
-            timeout=httpx.Timeout(120, connect=15), headers=headers
+            timeout=httpx.Timeout(120, connect=15),
+            headers=headers,
+            verify=True,
+            follow_redirects=False,
         )
         if client is not None and key:
             self._client.headers.update(headers)

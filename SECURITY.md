@@ -20,6 +20,11 @@ Include as much of the following as you can:
 You'll get an acknowledgement within 72 hours, and updates as the issue is investigated and
 fixed. Please give us a reasonable chance to release a fix before disclosing publicly.
 
+## How vecshift protects you
+
+[docs/security.md](docs/security.md) describes what vecshift sends, stores, and touches, and
+how it handles credentials.
+
 ## Supported versions
 
 VecShift is pre-release. Security fixes go into the latest version on `main`.

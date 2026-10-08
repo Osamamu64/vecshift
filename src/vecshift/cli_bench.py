@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Annotated
 import typer
 
 from vecshift import __version__
+from vecshift.cli_style import warn_if_password_on_command_line
 
 if TYPE_CHECKING:
     from vecshift.bench import BenchResult, PlanItem
@@ -137,6 +138,7 @@ def _render(result: BenchResult) -> None:
 
 
 def bench(
+    ctx: typer.Context,
     model: Annotated[
         list[str] | None,
         typer.Option(
@@ -198,6 +200,7 @@ def bench(
     ] = None,
 ) -> None:
     """Compare embedding models on a sample of your own data."""
+    warn_if_password_on_command_line(ctx, dsn)
     try:
         from vecshift.bench import Benchmark, CorpusError, Query, plan, run
         from vecshift.bench import corpus as corpus_mod

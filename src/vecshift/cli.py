@@ -11,12 +11,15 @@ import typer
 
 from vecshift import __version__
 from vecshift.cli_style import STYLE as _STYLE
+from vecshift.cli_style import warn_if_password_on_command_line
 from vecshift.cli_style import wrap as _wrap
 from vecshift.core.fingerprint import EmbeddingFingerprint
 from vecshift.doctor import Report, Severity, run_checks
 
 app = typer.Typer(
     name="vecshift",
+    # Tracebacks must never print local variables: they can hold connection strings and keys.
+    pretty_exceptions_show_locals=False,
     help="Safe, observable embedding migrations for any vector store.",
     no_args_is_help=True,
     add_completion=False,
@@ -103,6 +106,7 @@ def _render(report: Report, connection: str) -> None:
 
 @app.command()
 def doctor(
+    ctx: typer.Context,
     dsn: Annotated[
         str,
         typer.Option(
@@ -140,6 +144,7 @@ def doctor(
     ] = FailOn.NEVER,
 ) -> None:
     """Inspect a pgvector index and report problems. Read-only."""
+    warn_if_password_on_command_line(ctx, dsn)
     try:
         from vecshift.connectors import pgvector
     except ImportError as exc:  # pragma: no cover - depends on installed extras

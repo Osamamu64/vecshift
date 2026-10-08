@@ -150,6 +150,7 @@ produces a different tag, because it's a different vector space.
 - [pgvector and Supabase](docs/connectors/pgvector.md): connecting, what `doctor` checks, and safety
 - [Architecture](docs/architecture.md): the canonical record, plugin contracts, and capability flags
 - [Roadmap](docs/roadmap.md): what's being built, in what order, and why
+- [Security model](docs/security.md): what vecshift sends, stores, and touches
 - [Prior art](docs/prior-art.md): related tools and how VecShift relates to them
 
 ## Contributing

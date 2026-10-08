@@ -35,3 +35,23 @@ def finding_lines(findings: Sequence[Finding]) -> None:
         typer.echo(wrap(finding.detail.replace("`", "")))
         if finding.hint:
             typer.secho(wrap(f"→ {finding.hint.replace('`', '')}"), dim=True)
+
+
+def warn_if_password_on_command_line(ctx: typer.Context, dsn: str | None) -> None:
+    """Passwords given as arguments are visible to other users through ps and shell history."""
+    source = ctx.get_parameter_source("dsn")
+    # Compared by name: typer may bundle its own copy of click's ParameterSource enum.
+    if dsn and source is not None and source.name == "COMMANDLINE":
+        from psycopg.conninfo import conninfo_to_dict
+
+        try:
+            has_password = bool(conninfo_to_dict(dsn).get("password"))
+        except Exception:  # an invalid string is reported later, where it's parsed
+            return
+        if has_password:
+            typer.secho(
+                "Warning: the --dsn password is visible to other users of this machine and "
+                "saved in shell history. Prefer the VECSHIFT_DSN environment variable.",
+                err=True,
+                fg=typer.colors.YELLOW,
+            )

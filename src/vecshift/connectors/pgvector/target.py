@@ -18,10 +18,28 @@ OPCLASS_SUFFIX = {"cosine": "cosine_ops", "inner_product": "ip_ops", "l2": "l2_o
 
 _SIMPLE = re.compile(r"^[a-z_][a-z0-9_$]*$")
 
+# PostgreSQL's reserved and type/function-name keywords, used when the server's own list
+# isn't available. They must be quoted to be used as names.
+_KEYWORDS = (
+    "all analyse analyze and any array as asc asymmetric authorization binary both case "
+    "cast check collate collation column concurrently constraint create cross "
+    "current_catalog current_date current_role current_schema current_time "
+    "current_timestamp current_user default deferrable desc distinct do else end except "
+    "false fetch for foreign freeze from full grant group having ilike in initially inner "
+    "intersect into is isnull join lateral leading left like limit localtime "
+    "localtimestamp natural not notnull null offset on only or order outer overlaps "
+    "placing primary references returning right select session_user similar some "
+    "symmetric system_user table tablesample then to trailing true union unique user "
+    "using variadic verbose when where window with"
+)
+FALLBACK_KEYWORDS = frozenset(_KEYWORDS.split())
 
-def quote_ident(name: str) -> str:
-    """Quote an identifier for display the way PostgreSQL needs it."""
-    return name if _SIMPLE.match(name) else '"' + name.replace('"', '""') + '"'
+
+def quote_ident(name: str, keywords: frozenset[str] = FALLBACK_KEYWORDS) -> str:
+    """Quote an identifier exactly when PostgreSQL needs it, like its quote_ident()."""
+    if _SIMPLE.match(name) and name not in keywords:
+        return name
+    return '"' + name.replace('"', '""') + '"'
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,6 +53,11 @@ class TargetState:
     column_dimensions: int | None
     maintenance_work_mem: int
     """Bytes available to an index build before it slows down."""
+    keywords: frozenset[str] = FALLBACK_KEYWORDS
+    """Words this server needs quoted when used as names."""
+
+    def q(self, name: str) -> str:
+        return quote_ident(name, self.keywords)
 
 
 def inspect_target(
@@ -57,6 +80,7 @@ def inspect_target(
     mem = conn.execute(
         "SELECT setting::bigint, unit FROM pg_settings WHERE name = 'maintenance_work_mem'"
     ).fetchone()
+    words = conn.execute("SELECT word FROM pg_get_keywords() WHERE catcode <> 'U'").fetchall()
     units = {"kB": 1024, "MB": 1024**2, "8kB": 8192, "B": 1}
     mem_bytes = int(mem[0]) * units.get(mem[1] or "kB", 1024) if mem else 64 * 1024**2
     return TargetState(
@@ -67,6 +91,7 @@ def inspect_target(
         column_type=str(col[0]) if col else None,
         column_dimensions=int(col[1]) if col and col[1] > 0 else None,
         maintenance_work_mem=mem_bytes,
+        keywords=frozenset(w[0] for w in words) or FALLBACK_KEYWORDS,
     )
 
 
@@ -89,18 +114,22 @@ def resolve_source_column(
 
 
 def add_column_sql(state: TargetState, column: str, vector_type: str, dims: int) -> str:
-    table = f"{quote_ident(state.source.schema)}.{quote_ident(state.source.table)}"
-    ext = quote_ident(state.extension_schema)
-    return f"ALTER TABLE {table} ADD COLUMN {quote_ident(column)} {ext}.{vector_type}({dims});"
+    if vector_type not in {"vector", "halfvec"}:
+        raise ValueError(f"unsupported vector type {vector_type!r}")
+    table = f"{state.q(state.source.schema)}.{state.q(state.source.table)}"
+    kind = f"{state.q(state.extension_schema)}.{state.q(vector_type)}({int(dims)})"
+    return f"ALTER TABLE {table} ADD COLUMN {state.q(column)} {kind};"
 
 
 def index_sql(
     state: TargetState, column: str, vector_type: str, method: str, metric: str, rows: int
 ) -> str:
-    table = f"{quote_ident(state.source.schema)}.{quote_ident(state.source.table)}"
-    name = quote_ident(f"{state.source.table}_{column}_{method}_idx"[:63])
-    opclass = f"{quote_ident(state.extension_schema)}.{vector_type}_{OPCLASS_SUFFIX[metric]}"
-    target = f"{quote_ident(column)} {opclass}"
+    if method not in {"hnsw", "ivfflat"} or vector_type not in {"vector", "halfvec"}:
+        raise ValueError(f"unsupported index {method!r} on {vector_type!r}")
+    table = f"{state.q(state.source.schema)}.{state.q(state.source.table)}"
+    name = state.q(f"{state.source.table}_{column}_{method}_idx"[:63])
+    ops = state.q(f"{vector_type}_{OPCLASS_SUFFIX[metric]}")
+    target = f"{state.q(column)} {state.q(state.extension_schema)}.{ops}"
     using = f"CREATE INDEX CONCURRENTLY {name} ON {table} USING {method} ({target})"
     if method == "ivfflat":
         # pgvector's guidance: rows / 1000 lists up to a million rows, sqrt(rows) beyond.
