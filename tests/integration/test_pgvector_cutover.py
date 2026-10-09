@@ -272,3 +272,160 @@ def test_cleanup_drops_the_old_vectors(
     # A later migration can start from here.
     plan = runner.invoke(app, ["plan", str(applied), "--json"], env={"VECSHIFT_DSN": db_dsn})
     assert "plan.cut_over" not in plan.stdout
+
+
+# --- Edge cases
+
+
+@pytest.mark.parametrize("pk_type", ["uuid", "text"])
+def test_round_trip_with_non_numeric_keys(
+    db_dsn: str,
+    setup: psycopg.Connection,
+    tmp_path: Path,
+    model_url: str,  # noqa: F811
+    pk_type: str,
+) -> None:
+    """Supabase tables often use UUID keys; keyset paging and rejected-row IDs must work."""
+    key = "gen_random_uuid()" if pk_type == "uuid" else "'doc-' || g"
+    setup.execute(
+        f"CREATE TABLE public.documents (id {pk_type} PRIMARY KEY, content text, "
+        "metadata jsonb, embedding extensions.vector(3))"
+    )
+    setup.execute(
+        f"INSERT INTO public.documents SELECT {key}, 'chunk ' || g, '{{}}', '[1,0,0]' "
+        "FROM generate_series(1, 150) g"
+    )
+    setup.execute("UPDATE public.documents SET content = 'REJECT-ME' WHERE content = 'chunk 77'")
+    path = apply_job(tmp_path, model_url, batch=7)
+    applied = run_apply(path, db_dsn, "--yes", "--json")
+    assert applied.exit_code == 0, applied.output
+    final = json_lines(applied.stdout)[-1]
+    assert final["rows_written"] == 149 and final["rows_failed"] == 1
+    again = json_lines(run_apply(path, db_dsn, "--yes", "--json").stdout)[-1]
+    assert again["rows_written"] == 0, "the rejected row is skipped, not retried in a loop"
+
+    assert run("cutover", path, db_dsn, "--yes", "--allow-missing").exit_code == 0
+    assert columns(setup) == {"embedding": DIMS, "embedding_old": 3}
+    assert run("rollback", path, db_dsn, "--yes").exit_code == 0
+    assert columns(setup) == {"embedding": 3, "embedding_v2": DIMS}
+
+
+def test_rows_arriving_during_the_switch_are_caught_up(
+    db_dsn: str, setup: psycopg.Connection, applied: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A row written after the final catch-up makes the switch retry, not lose it."""
+    import vecshift.cli_cutover as cli_cutover
+    from vecshift.connectors.pgvector import switch as switch_module
+
+    real = switch_module.PgSwitch.prepare
+    calls = 0
+
+    def prepare_then_insert(self: PgSwitch) -> None:
+        nonlocal calls
+        real(self)
+        calls += 1
+        if calls == 1:
+            setup.execute("INSERT INTO public.documents (content, metadata) VALUES ('gap', '{}')")
+
+    monkeypatch.setattr(switch_module.PgSwitch, "prepare", prepare_then_insert)
+    assert cli_cutover.CATCH_UP_TRIES >= 2
+    result = run("cutover", applied, db_dsn, "--yes", "--json")
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)["caught_up"] == 1
+    assert mismatched(setup, "embedding") == 0
+
+
+def test_a_failed_switch_changes_nothing(
+    db_dsn: str, setup: psycopg.Connection, applied: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If any statement in the switch fails, the renames roll back with it."""
+    from psycopg import sql
+
+    monkeypatch.setattr(
+        PgWriter, "sync_trigger_sql", lambda self, column=None: sql.SQL("SELECT 1/0")
+    )
+    result = run("cutover", applied, db_dsn, "--yes")
+    assert result.exit_code == 2 and "division by zero" in result.output
+    assert columns(setup) == {"embedding": 3, "embedding_v2": DIMS}
+    assert triggers(setup) == {"vecshift_sync_embedding_v2"}
+    assert not any("pending" in n for n in indexes(setup)), "the temporary index is removed"
+
+
+def test_index_names_that_are_taken(db_dsn: str, setup: psycopg.Connection, applied: Path) -> None:
+    """An old index already using the name the new one wants is renamed out of the way."""
+    setup.execute(
+        "ALTER INDEX public.documents_embedding_idx RENAME TO documents_embedding_hnsw_idx"
+    )
+    assert run("cutover", applied, db_dsn, "--yes").exit_code == 0
+    assert indexes(setup) == {
+        "documents_embedding_hnsw_idx": "embedding",
+        "documents_embedding_old_hnsw_idx": "embedding_old",
+    }
+    assert run("rollback", applied, db_dsn, "--yes").exit_code == 0
+    assert indexes(setup) == {
+        "documents_embedding_hnsw_idx": "embedding",
+        "documents_embedding_v2_hnsw_idx": "embedding_v2",
+    }
+
+
+def test_cutover_waits_for_a_running_apply(
+    db_dsn: str, setup: psycopg.Connection, applied: Path
+) -> None:
+    lay = layout()
+    with psycopg.connect(db_dsn, autocommit=True) as other:
+        PgWriter(other, lay).acquire()  # an apply in progress elsewhere
+        result = run("cutover", applied, db_dsn, "--yes")
+    assert result.exit_code == 2 and "already working" in result.output
+    assert columns(setup) == {"embedding": 3, "embedding_v2": DIMS}
+
+
+def test_leftover_temporary_index_is_replaced(
+    db_dsn: str, setup: psycopg.Connection, applied: Path
+) -> None:
+    """A cutover killed part way leaves its temporary index; the next one copes."""
+    setup.execute(
+        "CREATE INDEX documents_embedding_v2_pending_idx ON public.documents (id) "
+        "WHERE embedding_v2 IS NULL"
+    )
+    assert run("cutover", applied, db_dsn, "--yes").exit_code == 0
+    assert not any("pending" in n for n in indexes(setup))
+
+
+def test_views_block_rollback_and_cleanup(
+    db_dsn: str, setup: psycopg.Connection, applied: Path
+) -> None:
+    assert run("cutover", applied, db_dsn, "--yes").exit_code == 0
+    setup.execute("CREATE VIEW public.v_old AS SELECT id, embedding_old FROM public.documents")
+    for command in ("rollback", "cleanup"):
+        result = run(command, applied, db_dsn, "--yes")
+        assert result.exit_code == 2 and "v_old" in result.output, command
+    assert columns(setup) == {"embedding": DIMS, "embedding_old": 3}
+
+
+def test_rollback_counts_rows_inserted_after_cutover(
+    db_dsn: str, setup: psycopg.Connection, applied: Path
+) -> None:
+    assert run("cutover", applied, db_dsn, "--yes").exit_code == 0
+    vector = "[" + ",".join(["0.2"] * DIMS) + "]"
+    setup.execute(
+        "INSERT INTO public.documents (content, metadata, embedding) "
+        "SELECT 'post ' || g, '{}', %s::extensions.vector FROM generate_series(1, 3) g",
+        (vector,),
+    )
+    back = run("rollback", applied, db_dsn, "--yes", "--json")
+    assert json.loads(back.stdout)["missing"] == 3
+
+
+def test_budget_during_the_final_catch_up(
+    db_dsn: str,
+    setup: psycopg.Connection,
+    tmp_path: Path,
+    model_url: str,  # noqa: F811
+) -> None:
+    create_healthy(setup, rows=40)
+    path = apply_job(tmp_path, model_url, "budget_usd: 0.001")
+    assert run_apply(path, db_dsn, "--yes").exit_code == 0
+    setup.execute("UPDATE public.documents SET content = repeat('long text ', 3000)")
+    result = run("cutover", path, db_dsn, "--yes")
+    assert result.exit_code == 2 and "Nothing was switched" in result.output
+    assert columns(setup) == {"embedding": 3, "embedding_v2": DIMS}
