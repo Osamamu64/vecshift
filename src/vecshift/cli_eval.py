@@ -266,6 +266,10 @@ def eval_(
         bool, typer.Option("--yes", "-y", help="Don't ask before sending data.")
     ] = False,
     output_json: Annotated[bool, typer.Option("--json", help="Print results as JSON.")] = False,
+    html: Annotated[
+        Path | None,
+        typer.Option("--html", dir_okay=False, help="Also write an HTML report to this file."),
+    ] = None,
 ) -> None:
     """Compare the old and new vectors on your data: search quality and latency. Read-only."""
     from vecshift.connectors import pgvector
@@ -403,6 +407,13 @@ def eval_(
         typer.echo(json.dumps(report.to_dict(), indent=2))
     else:
         _render(report, job.name)
+    if html is not None:
+        from vecshift import __version__
+        from vecshift.eval.html import render_html
+
+        html.write_text(render_html(report, job=job.name, version=__version__), encoding="utf-8")
+        if not output_json:
+            typer.echo(f"\nWrote {html}")
     if report.verdict.status == "no_go":
         raise typer.Exit(1)
     if report.verdict.status == "inconclusive":

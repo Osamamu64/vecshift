@@ -173,29 +173,32 @@ async def _embed(
 
 
 def _sweep(
-    searcher: Searcher, side: Side, vectors: list[list[float]], warmup: int = 3
+    searcher: Searcher, side: Side, vectors: list[list[float]], warmup: int = 5
 ) -> tuple[str | None, list[SweepPoint]]:
     method, current, settings = searcher.index(side)
     for vector in vectors[:warmup]:
         searcher.search(side, vector, K)
     exact = [searcher.exact(side, v, K) for v in vectors]
     if method is None:
-        timings = []
+        scans = []
         for vector in vectors:
             started = time.perf_counter()
             searcher.exact(side, vector, K)
-            timings.append((time.perf_counter() - started) * 1000)
-        return None, [SweepPoint(None, 1.0, latency(timings), current=True)]
-    points = []
-    for setting in settings:
-        found, timings = [], []
-        for vector in vectors:
+            scans.append((time.perf_counter() - started) * 1000)
+        return None, [SweepPoint(None, 1.0, latency(scans), current=True)]
+    found: dict[int, list[list[str]]] = {s: [] for s in settings}
+    timings: dict[int, list[float]] = {s: [] for s in settings}
+    # Each query runs at every setting in turn, so caches warming up during the run
+    # don't flatter whichever setting happens to be measured last.
+    for i, vector in enumerate(vectors):
+        order = settings[i % len(settings) :] + settings[: i % len(settings)]
+        for setting in order:
             started = time.perf_counter()
-            found.append(searcher.search(side, vector, K, setting))
-            timings.append((time.perf_counter() - started) * 1000)
-        points.append(
-            SweepPoint(setting, overlap(found, exact), latency(timings), setting == current)
-        )
+            found[setting].append(searcher.search(side, vector, K, setting))
+            timings[setting].append((time.perf_counter() - started) * 1000)
+    points = [
+        SweepPoint(s, overlap(found[s], exact), latency(timings[s]), s == current) for s in settings
+    ]
     return method, points
 
 

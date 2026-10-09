@@ -40,6 +40,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the same document. Queries come from the rows themselves, a labeled file, or an LLM,
   optionally in the other language (`--cross-language`). It's read-only, and `--dsn-env`
   can point it at a replica.
+- `vecshift eval --html FILE` writes a self-contained report: the verdict, headline numbers
+  with their change, recall@10 per language as a before → after chart, and a latency vs
+  accuracy chart for both sides, each with a table view, in light and dark themes.
 - `source.model` in the job file names the model that made the current vectors.
 
 - `vecshift cutover` switches searches to the new vectors: in one transaction it renames

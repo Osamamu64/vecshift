@@ -84,9 +84,9 @@ and how it protects credentials. To report a vulnerability, see
 
 ## HTML reports
 
-Reports escape everything that comes from the database or a model, and carry a strict
-Content Security Policy: no network access at all, and only vecshift's own script,
-identified by its SHA-256 hash, may run. Even if an escaping bug ever let a name inject
+Reports (`doctor --html`, `bench --html`, `eval --html`) escape everything that comes from
+the database or a model, and carry a strict Content Security Policy: no network access at
+all, and only vecshift's own script, identified by its SHA-256 hash, may run. Even if an escaping bug ever let a name inject
 markup, the browser would refuse to run it or send anything anywhere.
 
 ## Supply chain

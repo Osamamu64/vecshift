@@ -159,8 +159,11 @@ def test_better_model_is_go(
     assert cli("apply", path, db_dsn, "--yes").exit_code == 0
     before = schema_snapshot(setup)
 
-    code, data = evaluate(path, db_dsn)
+    report = tmp_path / "eval.html"
+    code, data = evaluate(path, db_dsn, "--html", str(report))
     assert code == 0 and data["verdict"]["status"] == "go", data["verdict"]
+    page = report.read_text()
+    assert "GO: the new vectors are ready" in page and "Arabic → arabic" in page
     assert data["mode"] == "queries" and not data["partial"]
     old, new = data["old"], data["new"]
     assert {"all", "arabic→arabic", "latin→latin"} <= set(new["scores"])

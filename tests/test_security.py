@@ -7,6 +7,7 @@ import os
 import re
 import stat
 from pathlib import Path
+from typing import Any
 
 import httpx
 import pytest
@@ -129,8 +130,17 @@ def test_identifiers_are_quoted_when_needed(name: str, quoted: str) -> None:
 # --- HTML reports
 
 
-def test_reports_have_a_strict_content_security_policy() -> None:
-    page = render_html(run_checks(make_profile()))
+def _eval_page() -> str:
+    from tests.test_eval import run_fake
+    from vecshift.eval.html import render_html as render_eval
+
+    return render_eval(run_fake(), job="docs")
+
+
+@pytest.mark.parametrize("make_page", [lambda: render_html(run_checks(make_profile())), _eval_page])
+def test_reports_have_a_strict_content_security_policy(make_page: Any) -> None:
+    page = make_page()
+    assert not re.search(r'(src|href)="(https?:)?//', page), "nothing loads from the network"
     policy = re.search(r'http-equiv="Content-Security-Policy" content="([^"]+)"', page)
     assert policy, "missing CSP"
     rules = dict(r.strip().split(" ", 1) for r in policy.group(1).split(";"))

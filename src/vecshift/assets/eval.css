@@ -1,0 +1,91 @@
+/* vecshift eval report, on top of report.css. Old and new are two steps of one blue:
+   the lighter one is the baseline, the stronger one the new model. */
+:root { --old: #86b6ef; --new: #2a78d6; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --old: #1c5cab; --new: #5598e7; }
+}
+:root[data-theme="dark"] { --old: #1c5cab; --new: #5598e7; }
+@media print { :root, :root[data-theme="dark"] { --old: #86b6ef; --new: #2a78d6; } }
+
+.reasons { margin: 10px 0 0; padding-left: 18px; color: var(--ink-2); }
+.reasons li { margin: 2px 0; overflow-wrap: anywhere; }
+.reasons .warn { list-style: none; margin-left: -18px; display: flex; gap: 6px; align-items: flex-start; }
+.reasons .warn .sev { width: 16px; height: 16px; margin-top: 2px; }
+
+.delta { display: inline-flex; align-items: center; gap: 4px; }
+.delta i { font-style: normal; font-size: 11px; }
+.delta.good i { color: var(--good); }
+.delta.bad i { color: var(--critical); }
+
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: -4px 0 12px; padding: 0; list-style: none; font-size: 12px; color: var(--ink-2); }
+.legend li { display: inline-flex; align-items: center; gap: 6px; }
+.key { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex: none; }
+.key.line { width: 14px; height: 2px; border-radius: 1px; }
+.key.old { background: var(--old); }
+.key.new { background: var(--new); }
+.key.ring { background: transparent; box-shadow: inset 0 0 0 2px var(--ink-2); }
+
+/* Dumbbell: one row per language pair, old and new recall@10 on one track. */
+.db { display: grid; gap: 4px; }
+.db, .db-axis { --db-cols: minmax(96px, 30%) minmax(0, 1fr) 9.5em; }
+.db-row { display: grid; grid-template-columns: var(--db-cols); gap: 12px; align-items: center; min-height: 32px; }
+.db-label { font-size: 13px; color: var(--ink); overflow-wrap: anywhere; line-height: 1.25; }
+.db-label span { display: block; font-size: 11px; color: var(--muted); }
+.db-track { position: relative; height: 24px; }
+.db-track::before { content: ""; position: absolute; left: 0; right: 0; top: 50%; border-top: 1px solid var(--grid); }
+.db-grid { position: absolute; top: 0; bottom: 0; border-left: 1px solid var(--grid); }
+.db-line { position: absolute; top: 50%; height: 2px; margin-top: -1px; background: var(--axis); border-radius: 1px; }
+.db-dot {
+  position: absolute; top: 50%; width: 12px; height: 12px; margin: -6px 0 0 -6px; border-radius: 50%;
+  box-shadow: 0 0 0 2px var(--surface); cursor: default;
+}
+.db-dot::before { content: ""; position: absolute; inset: -6px; border-radius: 50%; }
+.db-dot.old { background: var(--old); }
+.db-dot.new { background: var(--new); z-index: 1; }
+.db-dot:hover, .db-dot:focus-visible { filter: brightness(1.12); z-index: 2; outline: none; box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--axis); }
+.db-value { font-size: 12px; color: var(--ink-2); white-space: nowrap; font-variant-numeric: tabular-nums; text-align: right; }
+.db-axis { display: grid; grid-template-columns: var(--db-cols); gap: 12px; }
+.db-axis .ticks { position: relative; height: 16px; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.db-axis .ticks span { position: absolute; transform: translateX(-50%); }
+.db-axis .ticks span:first-child { transform: none; }
+.db-axis .ticks span:last-child { transform: translateX(-100%); }
+
+/* Latency vs accuracy: index recall against search p95, one point per index setting. */
+.lc { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0 8px; }
+.lc .yaxis { height: 220px; width: 40px; }
+.lc .plot { height: 220px; border-left: 1px solid var(--axis); }
+.lc svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+.lc polyline { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+.lc polyline.old { stroke: var(--old); }
+.lc polyline.new { stroke: var(--new); }
+.lc .xaxis { position: relative; display: block; height: 16px; }
+.lc .xaxis span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
+.lc .xaxis span:first-child { transform: none; }
+.lc .xaxis span:last-child { transform: translateX(-100%); }
+.lp {
+  position: absolute; width: 10px; height: 10px; margin: 0 0 -5px -5px; border-radius: 50%;
+  box-shadow: 0 0 0 2px var(--surface); cursor: default;
+}
+.lp::before { content: ""; position: absolute; inset: -7px; border-radius: 50%; }
+.lp.old { background: var(--old); }
+.lp.new { background: var(--new); z-index: 1; }
+.lp.current { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--ink-2); }
+.lp:hover, .lp:focus-visible { filter: brightness(1.12); z-index: 3; outline: none; }
+.lc-label {
+  position: absolute; transform: translate(8px, 50%); font-size: 11px; color: var(--ink-2);
+  white-space: nowrap; pointer-events: none;
+}
+.lc-label.flip { transform: translate(calc(-100% - 8px), 50%); }
+
+.lat { padding: 6px 0 4px; }
+.lat .table-scroll { padding: 0 18px; }
+.lat table { margin: 0; }
+.lat tr:last-child td { border-bottom: 0; }
+.lat td:first-child { color: var(--ink-2); }
+.lat .total td { font-weight: 650; color: var(--ink); }
+.lat td.num { white-space: nowrap; }
+@media (max-width: 560px) {
+  .db, .db-axis { --db-cols: minmax(72px, 28%) minmax(0, 1fr) 7.5em; }
+  .db-row, .db-axis { gap: 8px; }
+  .db-axis .ticks span:nth-child(2), .db-axis .ticks span:nth-child(4) { display: none; }
+}

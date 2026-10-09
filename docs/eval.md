@@ -9,6 +9,7 @@ vecshift eval                                  # quality + latency, then GO / NO
 vecshift eval --json                           # the same, for scripts and CI
 vecshift eval --generate-queries openai/gpt-4o-mini --cross-language
 vecshift eval --max-p95-ms 80                  # also fail if the new setup is too slow
+vecshift eval --html eval.html                 # also write a report to share
 ```
 
 It works on a partial migration too (`apply --until 20`), so you can check a sample
@@ -104,6 +105,21 @@ Latency limits are optional: `--max-p95-ms 80` caps the new end-to-end p95 (quer
 embedding plus search), and `--max-slowdown 20` fails if it's more than 20% slower than
 the old one. Warnings, such as an index finding less than 90% of the exact top 10, don't
 change the verdict.
+
+## The HTML report
+
+`--html FILE` writes a single self-contained page: the verdict, the headline numbers with
+their change from old to new, recall@10 per language as a before → after chart, and the
+latency vs accuracy curve for both sides, each with a table view. Like the doctor report,
+it works offline, follows the reader's light or dark theme, and runs only its own script
+under a strict Content Security Policy.
+
+[![A vecshift eval HTML report: verdict, key numbers, recall by language, and latency vs accuracy](images/eval-report.png)](images/eval-report.png)
+
+Search times on a small table are a few milliseconds, so differences under a millisecond
+are noise; compare the shape of the curves, and run eval against production-sized data
+(or a replica) for latency you can act on. Each query is timed at every setting in turn,
+so cache warm-up doesn't favour one setting.
 
 ## What leaves your machine
 
