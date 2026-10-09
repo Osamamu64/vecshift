@@ -207,16 +207,11 @@ class Prepared:
     plan: Plan
 
 
-def prepare(
-    job_file: Path, *, sample_size: int = 2000, probe: bool = False, yes: bool = False
-) -> Prepared:
-    """Load the job, inspect the database read-only, and build the plan."""
+def load(job_file: Path) -> tuple[JobSpec, ConnectionSettings, ModelSpec]:
+    """The job, its connection settings (from the environment), and its model."""
     from vecshift.connectors import pgvector
-    from vecshift.connectors.pgvector.documents import sample_documents
-    from vecshift.connectors.pgvector.target import inspect_target, resolve_source_column
-    from vecshift.embeddings import EmbeddingError, parse_spec
+    from vecshift.embeddings import parse_spec
     from vecshift.jobs import JobError, load_job
-    from vecshift.planning import SampleStats, build_plan
 
     try:
         job = load_job(job_file)
@@ -233,10 +228,25 @@ def prepare(
             f"{job.source.dsn_env} isn't set.",
             f"Export the database connection string as {job.source.dsn_env}.",
         )
-    spec = parse_spec(job.model)
-
     try:
         settings = pgvector.prepare(dsn)
+    except pgvector.ConnectError as exc:
+        raise _fail(f"Couldn't connect: {exc}", exc.hint) from exc
+    return job, settings, parse_spec(job.model)
+
+
+def prepare(
+    job_file: Path, *, sample_size: int = 2000, probe: bool = False, yes: bool = False
+) -> Prepared:
+    """Load the job, inspect the database read-only, and build the plan."""
+    from vecshift.connectors import pgvector
+    from vecshift.connectors.pgvector.documents import sample_documents
+    from vecshift.connectors.pgvector.target import inspect_target, resolve_source_column
+    from vecshift.embeddings import EmbeddingError
+    from vecshift.planning import SampleStats, build_plan
+
+    job, settings, spec = load(job_file)
+    try:
         conn = pgvector.connect(settings)
     except pgvector.ConnectError as exc:
         raise _fail(f"Couldn't connect: {exc}", exc.hint) from exc

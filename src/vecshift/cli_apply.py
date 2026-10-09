@@ -113,8 +113,8 @@ def _summary(result: ApplyResult) -> None:
         typer.echo(f"  Rejected by the provider: {result.rows_failed:,} rows (retried next run)")
     if result.status == "complete":
         typer.echo(
-            "\nNext: keep apply running (or re-run it) until you cut over, so new and edited "
-            "rows get vectors too. Before cutover, switch your app's ingestion to the new model."
+            "\nNext: check it's safe to switch with `vecshift cutover --check`, then run "
+            "`vecshift cutover`.\nIt embeds any rows added or edited since this run first."
         )
 
 
@@ -124,6 +124,16 @@ def apply(
     no_index: Annotated[
         bool, typer.Option("--no-index", help="Backfill only; build the index on a later run.")
     ] = False,
+    until: Annotated[
+        int | None,
+        typer.Option(
+            "--until",
+            min=1,
+            max=99,
+            metavar="PERCENT",
+            help="Stop once this share of rows has a new vector, to check before continuing.",
+        ),
+    ] = None,
     output_json: Annotated[
         bool, typer.Option("--json", help="Print progress as JSON lines, for scripts and UIs.")
     ] = False,
@@ -227,6 +237,7 @@ def apply(
                 index=index,
                 on_event=on_event,
                 should_stop=lambda: stop.requested,
+                until=until / 100 if until else None,
             )
         )
     except AlreadyRunning as exc:

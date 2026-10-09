@@ -56,21 +56,26 @@ class Layout:
     vector_type: str
     dims: int
     extension_schema: str
+    live: str = ""
+    """The column the application searches. Cutover gives the new vectors this name."""
 
     @property
     def qualified(self) -> sql.Identifier:
         return sql.Identifier(self.schema, self.table)
 
     @property
-    def trigger_name(self) -> str:
-        return f"vecshift_sync_{self.target}"[:63]
+    def previous(self) -> str:
+        """Where cutover keeps the old vectors, for rollback."""
+        return f"{self.live}_old"[:63]
 
-    @property
-    def function_name(self) -> str:
-        return f"vecshift_sync_{self.table}_{self.target}"[:63]
+    def trigger_name(self, column: str | None = None) -> str:
+        return f"vecshift_sync_{column or self.target}"[:63]
 
-    def index_name(self, method: str) -> str:
-        return f"{self.table}_{self.target}_{method}_idx"[:63]
+    def function_name(self, column: str | None = None) -> str:
+        return f"vecshift_sync_{self.table}_{column or self.target}"[:63]
+
+    def index_name(self, method: str, column: str | None = None) -> str:
+        return f"{self.table}_{column or self.target}_{method}_idx"[:63]
 
     @property
     def lock_key(self) -> int:
@@ -188,42 +193,91 @@ class PgWriter:
         self._locked([statement], "add the new column")
         return True
 
-    def trigger_exists(self) -> bool:
+    def trigger_exists(self, column: str | None = None) -> bool:
         row = self.conn.execute(
             "SELECT 1 FROM pg_trigger WHERE tgrelid = %s::regclass AND tgname = %s",
-            (self._regclass(), self.layout.trigger_name),
+            (self._regclass(), self.layout.trigger_name(column)),
         ).fetchone()
         return row is not None
+
+    def sync_function_sql(self, column: str | None = None) -> sql.Composed:
+        """A trigger function that clears ``column`` when a row's text changes.
+
+        If the same update also writes ``column`` itself (an application already writing
+        the new model's vectors), that value is kept.
+        """
+        lay = self.layout
+        col = sql.Identifier(column or lay.target)
+        tag = sql.SQL("$vs_" + secrets.token_hex(4) + "$")
+        body = sql.SQL(
+            "BEGIN IF NEW.{text} IS DISTINCT FROM OLD.{text} "
+            "AND NEW.{col} IS NOT DISTINCT FROM OLD.{col} THEN NEW.{col} := NULL; END IF; "
+            "RETURN NEW; END"
+        ).format(text=sql.Identifier(lay.text), col=col)
+        # A fixed search path finds pgvector's operators wherever the extension lives, and
+        # stops other schemas from shadowing them.
+        return sql.SQL(
+            "CREATE OR REPLACE FUNCTION {fn}() RETURNS trigger LANGUAGE plpgsql "
+            "SET search_path = pg_catalog, {ext} AS {tag}{body}{tag}"
+        ).format(
+            fn=sql.Identifier(lay.schema, lay.function_name(column)),
+            ext=sql.Identifier(lay.extension_schema),
+            tag=tag,
+            body=body,
+        )
+
+    def sync_trigger_sql(self, column: str | None = None) -> sql.Composed:
+        # Listing the guarded column makes the trigger depend on it, so dropping the column
+        # by hand fails clearly instead of leaving a trigger that breaks every update.
+        lay = self.layout
+        return sql.SQL(
+            "CREATE TRIGGER {name} BEFORE UPDATE OF {text}, {col} ON {table} "
+            "FOR EACH ROW EXECUTE FUNCTION {fn}()"
+        ).format(
+            name=sql.Identifier(lay.trigger_name(column)),
+            text=sql.Identifier(lay.text),
+            col=sql.Identifier(column or lay.target),
+            table=lay.qualified,
+            fn=sql.Identifier(lay.schema, lay.function_name(column)),
+        )
+
+    def drop_sync_sql(self, column: str | None = None) -> list[sql.Composed]:
+        lay = self.layout
+        return [
+            sql.SQL("DROP TRIGGER IF EXISTS {name} ON {table}").format(
+                name=sql.Identifier(lay.trigger_name(column)), table=lay.qualified
+            ),
+            sql.SQL("DROP FUNCTION IF EXISTS {fn}()").format(
+                fn=sql.Identifier(lay.schema, lay.function_name(column))
+            ),
+        ]
 
     def ensure_trigger(self) -> bool:
         """Clear a row's new vector whenever its text changes, so it gets re-embedded.
 
-        Returns whether the trigger was created.
+        Returns whether the trigger was created. The function is always replaced, which
+        needs no lock on the table, so older installs pick up fixes.
         """
         if self.trigger_exists():
+            with self.conn.transaction():
+                _limits(self.conn, STATEMENT_TIMEOUT_MS, self.lock_timeout_ms)
+                self.conn.execute(self.sync_function_sql())
             return False
-        lay = self.layout
-        tag = sql.SQL("$vs_" + secrets.token_hex(4) + "$")
-        body = sql.SQL(
-            "BEGIN IF NEW.{text} IS DISTINCT FROM OLD.{text} THEN NEW.{target} := NULL; END IF; "
-            "RETURN NEW; END"
-        ).format(text=sql.Identifier(lay.text), target=sql.Identifier(lay.target))
-        function = sql.SQL(
-            "CREATE OR REPLACE FUNCTION {fn}() RETURNS trigger LANGUAGE plpgsql AS {tag}{body}{tag}"
-        ).format(fn=sql.Identifier(lay.schema, lay.function_name), tag=tag, body=body)
-        trigger = sql.SQL(
-            "CREATE TRIGGER {name} BEFORE UPDATE OF {text} ON {table} "
-            "FOR EACH ROW EXECUTE FUNCTION {fn}()"
-        ).format(
-            name=sql.Identifier(lay.trigger_name),
-            text=sql.Identifier(lay.text),
-            table=lay.qualified,
-            fn=sql.Identifier(lay.schema, lay.function_name),
-        )
-        self._locked([function, trigger], "add the sync trigger")
+        self._locked([self.sync_function_sql(), self.sync_trigger_sql()], "add the sync trigger")
         return True
 
     # --- backfill
+
+    def total_count(self) -> int:
+        """Rows with text, which should all end up with a new vector."""
+        lay = self.layout
+        query = sql.SQL(
+            "SELECT count(*) FROM {table} WHERE {text} IS NOT NULL AND btrim({text}::text) <> ''"
+        ).format(table=lay.qualified, text=sql.Identifier(lay.text))
+        with self.conn.transaction():
+            _limits(self.conn, SCAN_TIMEOUT_MS)
+            row = self.conn.execute(query).fetchone()
+        return int(row[0]) if row else 0
 
     def pending_count(self, exclude: Sequence[str] = ()) -> int:
         lay = self.layout
@@ -312,10 +366,12 @@ class PgWriter:
         """``valid``, ``invalid`` (a failed concurrent build), or ``None`` when absent."""
         row = self.conn.execute(
             """
-            SELECT i.indisvalid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
-            WHERE i.indrelid = %s::regclass AND c.relname = %s
+            SELECT i.indisvalid FROM pg_index i
+            JOIN pg_class c ON c.oid = i.indexrelid
+            JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = i.indkey[0]
+            WHERE i.indrelid = %s::regclass AND c.relname = %s AND a.attname = %s
             """,
-            (self._regclass(), self.layout.index_name(method)),
+            (self._regclass(), self.layout.index_name(method), self.layout.target),
         ).fetchone()
         if row is None:
             return None

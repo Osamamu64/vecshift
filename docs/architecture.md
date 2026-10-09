@@ -149,6 +149,12 @@ still end with every vector matching its row's current text. A small
 [state file](../src/vecshift/migrate/state.py) keeps only what the database can't: spend
 across runs and rejected row IDs.
 
+Cutover ([`switch.py`](../src/vecshift/connectors/pgvector/switch.py)) renames columns in
+one transaction, so the application's column name now holds the new vectors. The sync
+trigger always guards whichever column isn't live, which is what lets rollback report
+exactly which rows lack an old-model vector. Stores that can't rename a vector field will
+implement the same step with an alias swap.
+
 ## Change capture
 
 Keeping a shadow index in sync with live writes depends on what the source offers:

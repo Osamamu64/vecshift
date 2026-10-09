@@ -24,6 +24,8 @@ class JobState:
     runs: int = 0
     failed: dict[str, str] = field(default_factory=dict)
     """Row ID → error, for rows the provider rejected. Text is never stored."""
+    history: list[dict[str, str]] = field(default_factory=list)
+    """Cutovers and rollbacks: what happened, when, and to which columns."""
     updated_at: str | None = None
 
     @classmethod

@@ -6,6 +6,7 @@ embedding contract, so it can be tested with fakes and reused for other stores.
 
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -37,6 +38,7 @@ class Writer(Protocol):
     def release(self) -> None: ...
     def ensure_column(self) -> bool: ...
     def ensure_trigger(self) -> bool: ...
+    def total_count(self) -> int: ...
     def pending_count(self, exclude: Sequence[str] = ()) -> int: ...
     def fetch(self, after: Any, limit: int, exclude: Sequence[str] = ()) -> Sequence[Row]: ...
     def write(self, items: Sequence[tuple[Any, Sequence[float]]]) -> int: ...
@@ -113,8 +115,13 @@ async def apply(
     index: tuple[str, str] | None,
     on_event: Callable[[Event], None] = lambda e: None,
     should_stop: Callable[[], bool] = lambda: False,
+    until: float | None = None,
 ) -> ApplyResult:
-    """Run (or resume) a migration. Safe to run again at any time to catch up."""
+    """Run (or resume) a migration. Safe to run again at any time to catch up.
+
+    ``until`` (a fraction, such as 0.5) stops once that share of the rows with text has a
+    new vector, so a migration can be checked part way and continued later.
+    """
     started = time.monotonic()
     result = ApplyResult(status="complete")
     tokens_before = embedder.tokens
@@ -147,6 +154,12 @@ async def apply(
         on_event(Event("column", {"added": writer.ensure_column()}))
         on_event(Event("trigger", {"added": writer.ensure_trigger()}))
         pending = writer.pending_count(tuple(state.failed))
+        quota: int | None = None
+        if until is not None:
+            total = writer.total_count()
+            done = total - writer.pending_count()
+            quota = max(0, math.ceil(total * until) - done)
+            pending = min(pending, quota)
         on_event(Event("start", {"pending": pending, "spent_before": spent_before}))
 
         for number in range(1, MAX_PASSES + 2):
@@ -156,7 +169,19 @@ async def apply(
                 if should_stop():
                     result.remaining = writer.pending_count(tuple(state.failed))
                     return finish("stopped", "Stopped. Run apply again to continue.")
-                rows = writer.fetch(after, chunk_rows, tuple(state.failed))
+                limit = chunk_rows
+                if quota is not None and result.rows_written >= quota:
+                    result.remaining = writer.pending_count(tuple(state.failed))
+                    if result.remaining:
+                        return finish(
+                            "stopped",
+                            f"Reached {until or 0:.0%} of rows. Check the new vectors, then "
+                            "run apply again to continue.",
+                        )
+                    break
+                if quota is not None:
+                    limit = min(chunk_rows, quota - result.rows_written)
+                rows = writer.fetch(after, limit, tuple(state.failed))
                 if not rows:
                     break
                 after = rows[-1].key

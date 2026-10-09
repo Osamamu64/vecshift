@@ -1,14 +1,18 @@
-# Planning a migration
+# Running a migration
 
 A migration re-embeds a pgvector column with a new model, side by side with the old one,
-then switches searches over in one step. This page covers the job file,
-`vecshift plan`, and `vecshift apply`. `cutover` and `rollback` come next.
+then switches searches over in one step. This page covers the job file and the four
+commands: `plan`, `apply`, `cutover`, and `rollback`.
 
 ```bash
 vecshift init --table public.documents --model openai/text-embedding-3-large,dims=1024
 export VECSHIFT_DSN='postgresql://...'
 vecshift plan                 # reads vecshift.yaml; changes nothing
 vecshift apply                # adds the column, embeds every row, builds the index
+vecshift cutover --check      # is it safe to switch? changes nothing
+vecshift cutover              # searches now use the new vectors, under the same name
+vecshift rollback             # if needed: the old vectors are back, instantly
+vecshift cleanup              # when you're sure: drop the old vectors for good
 ```
 
 ## How the migration works
@@ -20,10 +24,13 @@ vecshift apply                # adds the column, embeds every row, builds the in
 2. **Backfill.** Each row's text is embedded with the new model and written to the new
    column, in resumable batches, while the table keeps serving reads and writes.
 3. **Index.** The vector index is built on the new column after the backfill, concurrently.
-4. **Cut over.** The old and new columns are swapped by renaming them in one transaction,
-   so searches switch atomically. Rollback renames them back.
+4. **Cut over.** The live column is renamed to `embedding_old` and the new one to
+   `embedding`, in one transaction that takes milliseconds, so every search switches at
+   once. Rollback renames them back.
 
-Your application keeps querying the same column name throughout.
+Your application keeps querying the same column name throughout. The one thing it has to
+change is the model it embeds queries and new rows with, at cutover time: a query embedded
+by one model can't be compared with vectors from another.
 
 ## The job file
 
@@ -105,6 +112,7 @@ question.
 vecshift apply                # asks first; --yes skips the question
 vecshift apply --json         # progress as JSON lines, for scripts and dashboards
 vecshift apply --no-index     # backfill only; build the index on a later run
+vecshift apply --until 50     # stop once half the rows have a new vector
 ```
 
 `apply` re-runs the plan first and refuses to start if it has errors. It then shows the
@@ -130,13 +138,16 @@ left off. The database itself records which rows are done (their new vector is f
 so nothing is embedded twice.
 
 - **Ctrl-C** once finishes the current batch and stops; a second Ctrl-C aborts at once.
+- **`--until PERCENT`** stops once that share of rows has a new vector, so you can check
+  the new vectors on part of the data before paying for the rest. Searches keep using the
+  old vectors the whole time.
 - **Run it again** at any time. A re-run embeds only rows that are new or whose text
-  changed since, which makes it the way to catch up just before cutover.
+  changed since. `cutover` does this one last time itself.
 
-Until you cut over, your application still writes vectors from the old model to the old
-column. New and edited rows get their new vector the next time `apply` runs, so switch
-your application's ingestion to the new model before cutover and run `apply` once more
-right before it.
+Until you cut over, your application keeps writing the old model's vectors to the live
+column, and the sync trigger clears the new vector of any row whose text it changes. If
+your application starts writing the new model's vectors to the new column itself, the
+trigger keeps them.
 
 ### Budget
 
@@ -159,7 +170,7 @@ retried on the next run after the others.
 | 0 | Every row with text has a new vector, and the index is built |
 | 1 | Failed: the plan has errors, the model returned the wrong size, or the database reported an error |
 | 2 | Not started: bad arguments, no confirmation, or the job can't run as configured |
-| 3 | Stopped on purpose (Ctrl-C, the budget, or rows still changing); run `apply` again |
+| 3 | Stopped on purpose (Ctrl-C, the budget, `--until`, or rows still changing); run `apply` again |
 
 ### Locks and concurrency
 
@@ -180,8 +191,8 @@ the spend count and retries rejected rows; the rows already done stay done.
 
 ### Permissions
 
-`apply` adds a column, a trigger, and an index, which PostgreSQL only allows the table's
-owner to do. Run it as the owner (on Supabase, `postgres`), or as a role that is a member
+`apply` adds a column, a trigger, and an index, `cutover` and `rollback` rename columns,
+and `cleanup` drops one, which PostgreSQL only allows the table's owner to do. Run it as the owner (on Supabase, `postgres`), or as a role that is a member
 of the owning role:
 
 ```sql
@@ -192,3 +203,83 @@ grant postgres to vecshift_migrator;   -- or whichever role owns the table
 
 Table owners bypass row-level security unless the table uses `FORCE ROW LEVEL SECURITY`,
 so `apply` sees every row. Revoke the membership once the migration is done.
+
+## Cutting over
+
+```bash
+vecshift cutover --check      # changes nothing; exits 1 if it isn't safe
+vecshift cutover              # asks first; --yes skips the question
+```
+
+`cutover --check` reports whether the switch is safe:
+
+| Check | Severity |
+|---|---|
+| `apply` hasn't run, or the table was already cut over | error |
+| `<column>_old` already exists (left from an earlier migration) | error |
+| Rows with text but no new vector | error for `--check`; `cutover` embeds them first |
+| The vector index on the new column isn't built | error |
+| The new column holds vectors of different sizes | error |
+| Views or SQL-standard functions bound to a vector column | error |
+| Rows with a vector but no text, which will have none after cutover | warning |
+| The vector size changes, so old-model queries and inserts will fail until the app switches | warning |
+
+Then `cutover`:
+
+1. Embeds rows added or edited since the last `apply`, after showing how many and where
+   their text goes.
+2. Briefly holds off writes (reads continue) while it confirms every row has a new vector.
+   A temporary index makes this check instant, even on large tables.
+3. In one transaction: renames `embedding` to `embedding_old` and `embedding_v2` to
+   `embedding`, renames vecshift's index to match, and moves the sync trigger to the old
+   column.
+4. Records the cutover in the state file.
+
+If rows keep arriving between the catch-up and the switch, it catches up again, up to
+three times. Rows the provider rejected block the switch; fix their text, or pass
+`--allow-missing` to switch without them.
+
+**At cutover, switch your application to the new model** for the queries it embeds and
+the rows it writes. Its SQL doesn't change. If the vector size changes (say 1536 to 1024),
+searches and inserts that still use the old model fail until it switches; if the size
+stays the same, they run but match poorly. Either way, deploy the model change together
+with the cutover.
+
+### Views and functions
+
+PostgreSQL ties views, materialized views, and SQL-standard functions (`BEGIN ATOMIC`) to
+a column itself, not its name, so after a rename they would keep reading the old vectors.
+Cutover refuses to run while any exist; drop them first and recreate them afterwards.
+Ordinary SQL and PL/pgSQL functions, such as Supabase's `match_documents`, look columns up
+by name each time they run and need no change.
+
+## Rolling back
+
+```bash
+vecshift rollback             # asks first; --yes skips the question
+```
+
+Rollback renames the columns back in one transaction: the old vectors are live again
+under the original name, and the new ones return to `embedding_v2`, where the sync
+trigger keeps them current for another cutover. Switch your application back to the old
+model at the same time.
+
+After cutover, the sync trigger guards the old column: when a row's text changes, its old
+vector is cleared. So rollback can tell you exactly how many rows were added or edited
+since cutover and have no old-model vector. Your application needs to embed those with
+the old model.
+
+## Cleaning up
+
+```bash
+vecshift cleanup              # asks you to type the column name; --yes skips that
+```
+
+When you're sure you won't roll back, `cleanup` drops `embedding_old`, its index, and the
+sync trigger guarding it, in one transaction. It can't be undone. Dropping a column is
+instant; its space is reused as rows are updated, or reclaimed at once with `VACUUM FULL`
+(which locks the table).
+
+Use `cleanup` rather than dropping the column by hand: the sync trigger depends on it, so
+PostgreSQL refuses a plain `DROP COLUMN` instead of leaving a trigger behind that would
+break your application's updates.

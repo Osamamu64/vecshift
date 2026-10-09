@@ -12,8 +12,8 @@
 ![Status: pre-alpha](https://img.shields.io/badge/status-pre--alpha-orange)
 
 > [!WARNING]
-> VecShift is in early development. `doctor`, `bench`, `plan`, and `apply` work today;
-> `cutover` is next. Watch the repo or read the [roadmap](docs/roadmap.md) to
+> VecShift is in early development. The full pgvector workflow works today: `doctor`,
+> `bench`, `plan`, `apply`, and `cutover`. `eval` is next. Watch the repo or read the [roadmap](docs/roadmap.md) to
 > follow along.
 
 ---
@@ -41,7 +41,7 @@ VecShift answers those first, then makes the migration itself safe and repeatabl
 | `vecshift init` / `plan` | Write a migration job, then check it and estimate tokens, cost, time, and storage | ✅ Available |
 | `vecshift apply` | Re-embed into a side-by-side column with resume, a spend cap, live-write sync, and a concurrent index build | ✅ pgvector and Supabase |
 | `vecshift eval` | Compare old and new indexes and produce a go/no-go report | 📋 Planned |
-| `vecshift cutover` / `rollback` | Alias swap with instant rollback | 📋 Planned |
+| `vecshift cutover` / `rollback` | Switch searches to the new vectors under the same name, with instant rollback | ✅ pgvector and Supabase |
 
 Initial targets are **pgvector** and **Qdrant**, with an **OpenAI-compatible** embedding
 provider (which covers OpenAI, vLLM, Ollama, TEI, and most hosted inference) plus a free
@@ -139,8 +139,17 @@ uv run vecshift apply
 
 `apply` adds the new column next to the old one, embeds every row, and builds the index
 concurrently, while your application keeps reading and writing. It stops cleanly on
-Ctrl-C or at your budget, and running it again resumes, or catches up on rows edited since.
-See [Planning and running a migration](docs/migrations.md).
+Ctrl-C, at your budget, or part way with `--until 50`, and running it again resumes.
+
+```bash
+uv run vecshift cutover --check   # safe to switch?
+uv run vecshift cutover           # searches use the new vectors, under the same column name
+uv run vecshift rollback          # undo, instantly
+```
+
+Your application's SQL doesn't change: cutover gives the new vectors the column name it
+already uses, in one transaction. Switch the model your app embeds queries with at the
+same time. See [Running a migration](docs/migrations.md).
 
 ### Fingerprint an embedding configuration
 
@@ -156,7 +165,7 @@ produces a different tag, because it's a different vector space.
 
 ## Documentation
 
-- [Planning and running a migration](docs/migrations.md): the job file, `plan`, and `apply`
+- [Running a migration](docs/migrations.md): the job file, `plan`, `apply`, `cutover`, and `rollback`
 - [Benchmarking embedding models](docs/bench.md): sources, model specs, query types, and metrics
 - [pgvector and Supabase](docs/connectors/pgvector.md): connecting, what `doctor` checks, and safety
 - [Architecture](docs/architecture.md): the canonical record, plugin contracts, and capability flags

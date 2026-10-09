@@ -63,6 +63,9 @@ class FakeTable:
             if vec is None and text.strip() and str(k) not in exclude
         ]
 
+    def total_count(self) -> int:
+        return sum(1 for text, _ in self.rows.values() if text.strip())
+
     def pending_count(self, exclude: Sequence[str] = ()) -> int:
         return len(self._pending(exclude))
 
@@ -254,3 +257,17 @@ def test_state_file_names_are_safe(tmp_path: Path) -> None:
     state = JobState.for_job(tmp_path / "j.yaml", "../../etc/passwd")
     assert state.path.parent == tmp_path / ".vecshift"
     assert "/" not in state.path.name and ".." not in state.path.name.removesuffix(".state.json")
+
+
+def test_until_stops_at_a_share_of_rows(state: JobState) -> None:
+    table, model = FakeTable(100), FakeModel()
+    for key in range(1, 21):
+        table.rows[key][1] = [4.0] * 4  # 20% done in an earlier run
+    result, events = run(table, model, state, until=0.5, chunk_rows=7)
+    assert result.status == "stopped" and "50%" in (result.message or "")
+    assert result.rows_written == 30 and result.remaining == 50
+    assert events[2].data["pending"] == 30 and table.index is None
+    result, _ = run(table, model, state, until=0.5)
+    assert result.status == "stopped" and result.rows_written == 0, "already at 50%"
+    result, _ = run(table, model, state)
+    assert result.status == "complete" and result.rows_written == 50

@@ -14,6 +14,7 @@ and how it protects credentials. To report a vulnerability, see
 | `bench` | The sampled documents and queries | Each model's API, after you confirm |
 | `bench --generate-queries` | The sampled documents | The chat model's API, after you confirm |
 | `apply` | Every row's text | The new model's API, after you confirm |
+| `cutover` | The text of rows added or edited since the last `apply` | The new model's API, after you confirm |
 
 - Before any text goes to a remote API, vecshift says how much and to where, and asks.
   `--yes` skips the question. Without a terminal it refuses unless `--yes` is given.
@@ -43,10 +44,15 @@ and how it protects credentials. To report a vulnerability, see
 
 - `doctor`, `bench`, and `plan` connect read-only, so the database rejects any write, and
   every statement runs under a timeout.
-- `apply` is the only command that writes. It shows what it will change and asks first
-  (`--yes` skips the question; without a terminal it refuses unless `--yes` is given). It
-  only adds things: a column, a trigger and its function, and an index. It never drops or
-  rewrites existing columns, and its row writes touch only the new column.
+- `apply`, `cutover`, `rollback`, and `cleanup` are the only commands that write. Each
+  shows what it will change and asks first (`--yes` skips the question; without a
+  terminal it refuses unless `--yes` is given). `cleanup`, the only one that deletes data,
+  asks you to type the column's name.
+- `apply` only adds things: a column, a trigger and its function, and an index. Its row
+  writes touch only the new column. `cutover` and `rollback` only rename columns and
+  indexes and move the trigger; no vectors are deleted until `cleanup`.
+- vecshift's trigger functions pin their `search_path`, so objects in other schemas can't
+  change what they do.
 - Schema changes wait at most a few seconds for a lock and then back off, so `apply` never
   queues behind application queries and blocks them. A session advisory lock stops two
   runs from working on the same column at once.

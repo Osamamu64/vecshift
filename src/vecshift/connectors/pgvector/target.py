@@ -58,6 +58,8 @@ class TargetState:
     primary_key: tuple[str, ...] = ()
     """Primary key columns, in order. Apply needs exactly one."""
     text_column: str | None = None
+    previous_column_exists: bool = False
+    """Whether ``<column>_old`` exists: a cutover happened and hasn't been cleaned up."""
 
     def q(self, name: str) -> str:
         return quote_ident(name, self.keywords)
@@ -106,21 +108,36 @@ def inspect_target(
         maintenance_work_mem=mem_bytes,
         keywords=frozenset(w[0] for w in words) or FALLBACK_KEYWORDS,
         primary_key=tuple(str(r[0]) for r in pk_rows),
+        previous_column_exists=conn.execute(
+            """
+            SELECT 1 FROM pg_attribute
+            WHERE attrelid = %s AND attname = %s AND attnum > 0 AND NOT attisdropped
+            """,
+            (source.relid, f"{source.column}_old"[:63]),
+        ).fetchone()
+        is not None,
     )
 
 
 def resolve_source_column(
     conn: psycopg.Connection, table: str, vector_column: str | None, target_column: str
 ) -> str:
-    """The source vector column, ignoring the target column a previous run may have added."""
+    """The column the application searches.
+
+    It ignores the target column a previous run may have added, and the ``<name>_old``
+    column a cutover keeps for rollback.
+    """
     if vector_column:
         return vector_column
     columns = find_vector_columns(conn)
     schema, _, name = table.rpartition(".")
+    table_columns = [c for c in columns if c.table == name and (not schema or c.schema == schema)]
+    names = {c.column for c in table_columns}
     in_table = [
         c
-        for c in columns
-        if c.table == name and (not schema or c.schema == schema) and c.column != target_column
+        for c in table_columns
+        if c.column != target_column
+        and not (c.column.endswith("_old") and c.column.removesuffix("_old") in names)
     ]
     if len(in_table) == 1:
         return in_table[0].column

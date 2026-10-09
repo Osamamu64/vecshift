@@ -30,6 +30,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `vecshift cutover` switches searches to the new vectors: in one transaction it renames
+  the live column to `<name>_old` and the new column to `<name>`, so the application's SQL
+  doesn't change. It first embeds rows added or edited since the last `apply`, then
+  confirms under a brief write lock that every row has a new vector. `--check` reports
+  whether the switch is safe without changing anything: missing vectors, an unbuilt index,
+  views bound to the column, and a vector size change the application must match.
+- `vecshift rollback` renames the columns back, and reports rows added or edited since
+  cutover that have no old-model vector.
+- `vecshift cleanup` drops the old column, its index, and its trigger once you're sure.
+- `vecshift apply --until PERCENT` stops once that share of rows has a new vector.
+
+### Changed
+
+- The sync trigger keeps a new vector the application writes itself in the same update,
+  and pins its function's `search_path`. Dropping the column it guards by hand is refused
+  instead of leaving a broken trigger behind.
+- `plan` reports a table that was already cut over and not cleaned up.
+
 - `vecshift apply` runs a migration on pgvector and Supabase: it adds the new column and a
   trigger that clears a row's new vector when its text changes, embeds every row in
   resumable batches, makes catch-up passes for rows edited during the run, then builds the

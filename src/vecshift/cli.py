@@ -224,5 +224,9 @@ app.command()(init)
 app.command()(plan)
 
 from vecshift.cli_apply import apply  # noqa: E402
+from vecshift.cli_cutover import cleanup, cutover, rollback  # noqa: E402
 
 app.command()(apply)
+app.command()(cutover)
+app.command()(rollback)
+app.command()(cleanup)
