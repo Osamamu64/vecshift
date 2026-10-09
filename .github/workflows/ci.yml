@@ -62,7 +62,9 @@ jobs:
         postgres: ["16", "17"]
     services:
       postgres:
-        image: pgvector/pgvector:pg${{ matrix.postgres }}
+        # Docker Hub's mirror on Google: the same images (identical digests), without Docker
+        # Hub's rate limit on anonymous pulls from CI runners.
+        image: mirror.gcr.io/pgvector/pgvector:pg${{ matrix.postgres }}
         env:
           # A throwaway database that exists only for this job.
           POSTGRES_PASSWORD: postgres
