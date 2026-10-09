@@ -69,6 +69,7 @@ src/vecshift/
   jobs/        # the vecshift.yaml job spec
   planning/    # turning a job into a plan: changes, estimates, findings
   migrate/     # the apply loop and its state file, independent of any store
+  eval/        # comparing old and new vectors: queries, scores, latency, the verdict
   connectors/  # one package per store, e.g. pgvector
   cli.py       # command-line interface
 tests/         # pytest suite

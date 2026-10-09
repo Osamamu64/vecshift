@@ -13,8 +13,8 @@
 
 > [!WARNING]
 > VecShift is in early development. The full pgvector workflow works today: `doctor`,
-> `bench`, `plan`, `apply`, and `cutover`. `eval` is next. Watch the repo or read the [roadmap](docs/roadmap.md) to
-> follow along.
+> `bench`, `plan`, `apply`, `eval`, and `cutover`. Watch the repo or read the
+> [roadmap](docs/roadmap.md) to follow along.
 
 ---
 
@@ -40,7 +40,7 @@ VecShift answers those first, then makes the migration itself safe and repeatabl
 | `vecshift bench` | Compare embedding models on a sample of *your* data: recall, latency, cost, storage | ✅ Available |
 | `vecshift init` / `plan` | Write a migration job, then check it and estimate tokens, cost, time, and storage | ✅ Available |
 | `vecshift apply` | Re-embed into a side-by-side column with resume, a spend cap, live-write sync, and a concurrent index build | ✅ pgvector and Supabase |
-| `vecshift eval` | Compare old and new indexes and produce a go/no-go report | 📋 Planned |
+| `vecshift eval` | Compare old and new vectors on your data, per language, with latency vs accuracy, and a go/no-go verdict | ✅ pgvector and Supabase |
 | `vecshift cutover` / `rollback` | Switch searches to the new vectors under the same name, with instant rollback | ✅ pgvector and Supabase |
 
 Initial targets are **pgvector** and **Qdrant**, with an **OpenAI-compatible** embedding
@@ -142,6 +142,7 @@ concurrently, while your application keeps reading and writing. It stops cleanly
 Ctrl-C, at your budget, or part way with `--until 50`, and running it again resumes.
 
 ```bash
+uv run vecshift eval              # better on your data, and how fast? GO / NO-GO
 uv run vecshift cutover --check   # safe to switch?
 uv run vecshift cutover           # searches use the new vectors, under the same column name
 uv run vecshift rollback          # undo, instantly
@@ -149,7 +150,8 @@ uv run vecshift rollback          # undo, instantly
 
 Your application's SQL doesn't change: cutover gives the new vectors the column name it
 already uses, in one transaction. Switch the model your app embeds queries with at the
-same time. See [Running a migration](docs/migrations.md).
+same time. See [Running a migration](docs/migrations.md) and
+[Evaluating a migration](docs/eval.md).
 
 ### Fingerprint an embedding configuration
 
@@ -166,6 +168,7 @@ produces a different tag, because it's a different vector space.
 ## Documentation
 
 - [Running a migration](docs/migrations.md): the job file, `plan`, `apply`, `cutover`, and `rollback`
+- [Evaluating a migration](docs/eval.md): quality per language, latency vs accuracy, and the verdict
 - [Benchmarking embedding models](docs/bench.md): sources, model specs, query types, and metrics
 - [pgvector and Supabase](docs/connectors/pgvector.md): connecting, what `doctor` checks, and safety
 - [Architecture](docs/architecture.md): the canonical record, plugin contracts, and capability flags

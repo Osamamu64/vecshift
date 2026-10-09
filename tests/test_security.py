@@ -283,3 +283,24 @@ def test_switching_asks_before_changing_or_sending(command: str, changes: list[s
     asks = run.index("_confirm(") if "_confirm(" in run else run.index("typer.prompt(")
     for change in changes:
         assert asks < run.index(change)
+
+
+def test_eval_asks_before_sending_queries() -> None:
+    """Query text goes to remote models only after confirmation (or --yes)."""
+    import typer
+
+    from vecshift.cli_eval import _confirm
+
+    sends = [("openai/text-embedding-3-large", "https://api.openai.com/v1")]
+    with pytest.raises(typer.Exit):
+        _confirm(sends, 10, yes=False)  # no terminal in tests
+    _confirm(sends, 10, yes=True)
+    _confirm([("ollama/nomic-embed-text", "")], 10, yes=False)
+
+
+def test_eval_only_reads() -> None:
+    """eval connects read-only, so the database itself rejects any write."""
+    import vecshift.cli_eval as cli_eval
+
+    source = Path(cli_eval.__file__).read_text(encoding="utf-8")
+    assert "pgvector.connect(settings)" in source and "connect_writer" not in source

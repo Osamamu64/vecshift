@@ -15,6 +15,7 @@ and how it protects credentials. To report a vulnerability, see
 | `bench --generate-queries` | The sampled documents | The chat model's API, after you confirm |
 | `apply` | Every row's text | The new model's API, after you confirm |
 | `cutover` | The text of rows added or edited since the last `apply` | The new model's API, after you confirm |
+| `eval` | Short queries: sentences from sampled rows, your labeled queries, or LLM-written ones | The old and new models' APIs (and the chat model), after you confirm |
 
 - Before any text goes to a remote API, vecshift says how much and to where, and asks.
   `--yes` skips the question. Without a terminal it refuses unless `--yes` is given.
@@ -42,7 +43,7 @@ and how it protects credentials. To report a vulnerability, see
 
 ## The database
 
-- `doctor`, `bench`, and `plan` connect read-only, so the database rejects any write, and
+- `doctor`, `bench`, `plan`, and `eval` connect read-only, so the database rejects any write, and
   every statement runs under a timeout.
 - `apply`, `cutover`, `rollback`, and `cleanup` are the only commands that write. Each
   shows what it will change and asks first (`--yes` skips the question; without a

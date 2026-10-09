@@ -155,6 +155,15 @@ trigger always guards whichever column isn't live, which is what lets rollback r
 exactly which rows lack an old-model vector. Stores that can't rename a vector field will
 implement the same step with an alias swap.
 
+## Evaluating
+
+[`vecshift.eval`](../src/vecshift/eval/runner.py) compares the old and new vectors through
+a searcher interface (top k through the index at a given setting, exact top k, a row's
+nearest rows, stored vectors) and the embedding contract. The pgvector searcher in
+[`connectors/pgvector/search.py`](../src/vecshift/connectors/pgvector/search.py) runs every
+search in its own read-only transaction. Scores are grouped by query and document script,
+so a regression in one language can't hide in the average.
+
 ## Change capture
 
 Keeping a shadow index in sync with live writes depends on what the source offers:

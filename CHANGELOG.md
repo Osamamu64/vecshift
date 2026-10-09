@@ -30,6 +30,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `vecshift eval` compares the old and new vectors on your data before cutover, without
+  re-embedding documents. It reports recall@1, recall@10, and MRR@10 overall and for each
+  query → document script pair (Arabic and Latin), how much the top results changed,
+  query embedding latency, and search latency (p50, p95, p99) with index recall across
+  `hnsw.ef_search` or `ivfflat.probes` settings. It ends with GO, NO-GO, or INCONCLUSIVE
+  (exit status 0, 1, or 3), with optional latency limits. If the old model is unavailable
+  it judges the old side from stored vectors, by how well each row's nearest rows stay in
+  the same document. Queries come from the rows themselves, a labeled file, or an LLM,
+  optionally in the other language (`--cross-language`). It's read-only, and `--dsn-env`
+  can point it at a replica.
+- `source.model` in the job file names the model that made the current vectors.
+
 - `vecshift cutover` switches searches to the new vectors: in one transaction it renames
   the live column to `<name>_old` and the new column to `<name>`, so the application's SQL
   doesn't change. It first embeds rows added or edited since the last `apply`, then

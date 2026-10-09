@@ -207,8 +207,13 @@ class Prepared:
     plan: Plan
 
 
-def load(job_file: Path) -> tuple[JobSpec, ConnectionSettings, ModelSpec]:
-    """The job, its connection settings (from the environment), and its model."""
+def load(
+    job_file: Path, dsn_env: str | None = None
+) -> tuple[JobSpec, ConnectionSettings, ModelSpec]:
+    """The job, its connection settings (from the environment), and its model.
+
+    ``dsn_env`` reads the connection string from another variable, such as a replica's.
+    """
     from vecshift.connectors import pgvector
     from vecshift.embeddings import parse_spec
     from vecshift.jobs import JobError, load_job
@@ -222,11 +227,12 @@ def load(job_file: Path) -> tuple[JobSpec, ConnectionSettings, ModelSpec]:
             else None
         )
         raise _fail(str(exc), hint) from exc
-    dsn = os.environ.get(job.source.dsn_env)
+    variable = dsn_env or job.source.dsn_env
+    dsn = os.environ.get(variable)
     if not dsn:
         raise _fail(
-            f"{job.source.dsn_env} isn't set.",
-            f"Export the database connection string as {job.source.dsn_env}.",
+            f"{variable} isn't set.",
+            f"Export the database connection string as {variable}.",
         )
     try:
         settings = pgvector.prepare(dsn)

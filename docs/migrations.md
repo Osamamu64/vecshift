@@ -2,13 +2,15 @@
 
 A migration re-embeds a pgvector column with a new model, side by side with the old one,
 then switches searches over in one step. This page covers the job file and the four
-commands: `plan`, `apply`, `cutover`, and `rollback`.
+commands: `plan`, `apply`, `cutover`, and `rollback`. [Evaluating a migration](eval.md)
+covers `eval`, which compares the old and new vectors before you switch.
 
 ```bash
 vecshift init --table public.documents --model openai/text-embedding-3-large,dims=1024
 export VECSHIFT_DSN='postgresql://...'
 vecshift plan                 # reads vecshift.yaml; changes nothing
 vecshift apply                # adds the column, embeds every row, builds the index
+vecshift eval                 # is the new model better on your data? how fast? read-only
 vecshift cutover --check      # is it safe to switch? changes nothing
 vecshift cutover              # searches now use the new vectors, under the same name
 vecshift rollback             # if needed: the old vectors are back, instantly
@@ -46,6 +48,7 @@ source:
   table: public.documents
   vector_column: embedding     # only needed if the table has several vector columns
   text_column: content         # detected automatically for common names
+  model: openai/text-embedding-3-small   # the model that made the current vectors, for eval
 
 target:
   column: embedding_v2
