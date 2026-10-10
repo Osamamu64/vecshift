@@ -11,17 +11,20 @@ import typer
 
 from vecshift import __version__
 from vecshift.cli_style import STYLE as _STYLE
-from vecshift.cli_style import warn_if_password_on_command_line
+from vecshift.cli_style import banner, warn_if_password_on_command_line
 from vecshift.cli_style import wrap as _wrap
 from vecshift.core.fingerprint import EmbeddingFingerprint
 from vecshift.doctor import Report, Severity, run_checks
+from vecshift.envfile import DEFAULT as DEFAULT_ENV_FILE
+
+TAGLINE = "Safe, observable embedding migrations for any vector store."
 
 app = typer.Typer(
     name="vecshift",
     # Tracebacks must never print local variables: they can hold connection strings and keys.
     pretty_exceptions_show_locals=False,
-    help="Safe, observable embedding migrations for any vector store.",
-    no_args_is_help=True,
+    help=TAGLINE,
+    invoke_without_command=True,
     add_completion=False,
 )
 
@@ -32,8 +35,27 @@ def _print_version(value: bool) -> None:
         raise typer.Exit()
 
 
+def _load_env_file(path: Path | None) -> None:
+    from vecshift import envfile
+
+    if path is None:
+        return
+    try:
+        envfile.load(path)
+    except envfile.EnvFileError as exc:
+        typer.secho(f"Couldn't read {path}: {exc}", err=True, fg=typer.colors.RED)
+        raise typer.Exit(2) from exc
+    if envfile.readable_by_others(path):
+        typer.secho(
+            f"Warning: other users of this machine can read {path}. Run: chmod 600 {path}",
+            err=True,
+            fg=typer.colors.YELLOW,
+        )
+
+
 @app.callback()
 def main(
+    ctx: typer.Context,
     version: Annotated[
         bool,
         typer.Option(
@@ -43,8 +65,23 @@ def main(
             help="Show the version and exit.",
         ),
     ] = False,
+    env_file: Annotated[
+        Path,
+        typer.Option(
+            dir_okay=False,
+            help="Read settings such as VECSHIFT_DSN from this file, if it exists. Variables "
+            "already set in the environment take precedence.",
+        ),
+    ] = DEFAULT_ENV_FILE,
+    no_env_file: Annotated[
+        bool, typer.Option("--no-env-file", help="Don't read a .env file.")
+    ] = False,
 ) -> None:
     """Safe, observable embedding migrations for any vector store."""
+    _load_env_file(None if no_env_file else env_file)
+    if ctx.invoked_subcommand is None:
+        banner(__version__, TAGLINE)
+        typer.echo(ctx.get_help())
 
 
 @app.command()
@@ -218,7 +255,8 @@ from vecshift.cli_bench import bench  # noqa: E402
 
 app.command()(bench)
 
-from vecshift.cli_plan import init, plan  # noqa: E402
+from vecshift.cli_init import init  # noqa: E402
+from vecshift.cli_plan import plan  # noqa: E402
 
 app.command()(init)
 app.command()(plan)
@@ -234,3 +272,7 @@ app.command()(cleanup)
 from vecshift.cli_eval import eval_  # noqa: E402
 
 app.command(name="eval")(eval_)
+
+from vecshift.cli_status import status  # noqa: E402
+
+app.command()(status)

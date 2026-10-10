@@ -109,7 +109,7 @@ def _model_findings(spec: ModelSpec, findings: list[Finding]) -> None:
                 Severity.ERROR,
                 "No API key for the model",
                 f"{spec.key_env} isn't set, so apply couldn't call {spec.name}.",
-                hint=f"Export {spec.key_env} in the environment that runs vecshift.",
+                hint=f"Export {spec.key_env}, or add it to the .env file vecshift reads.",
             )
         )
 

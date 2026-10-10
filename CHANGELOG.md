@@ -7,6 +7,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `vecshift init` guides you at a terminal: it asks for the connection string (hidden),
+  lists the vector columns it finds, picks the text column, and offers a short list of
+  models and a spending limit, then shows the plan. Flags still work without prompts.
+- Commands read settings such as `VECSHIFT_DSN` and `OPENAI_API_KEY` from a `.env` file in
+  the current folder. Variables already set take precedence; `--env-file` and
+  `--no-env-file` choose another file or none. `init` can save to it, privately.
+- `vecshift status` shows where a migration stands and what to run next (`--json` too).
+- Running `vecshift` alone, and `vecshift init`, show the logo at a colour terminal.
+
 ## [0.1.0]
 
 The first release.

@@ -149,13 +149,23 @@ the [benchmarking guide](docs/bench.md).
 ### Plan a migration
 
 ```bash
+vecshift init
+```
+
+At a terminal, `init` walks you through it: paste your connection string (hidden as you
+type), pick the vector column and the text it came from, choose the new model, and set a
+spending limit. It writes a commented `vecshift.yaml`, can save the connection string to
+a private `.env` file if you want it to, and shows the plan. For scripts, pass everything
+as flags:
+
+```bash
 vecshift init --table public.documents --model openai/text-embedding-3-large,dims=1024
 vecshift plan
 ```
 
-`init` writes a commented `vecshift.yaml`. `plan` checks it against the database without
-changing anything: the SQL it would run, rows, tokens, cost, duration, and storage, plus
-anything that would make the migration fail.
+`plan` checks the job against the database without changing anything: the SQL it would
+run, rows, tokens, cost, duration, and storage, plus anything that would make the
+migration fail.
 
 ### Run it
 
@@ -168,6 +178,7 @@ concurrently, while your application keeps reading and writing. It stops cleanly
 Ctrl-C, at your budget, or part way with `--until 50`, and running it again resumes.
 
 ```bash
+vecshift status            # where it stands, and what to run next
 vecshift eval              # better on your data, and how fast? GO / NO-GO
 vecshift cutover --check   # safe to switch?
 vecshift cutover           # searches use the new vectors, under the same column name

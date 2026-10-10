@@ -316,6 +316,40 @@ def test_eval_only_reads() -> None:
     assert "pgvector.connect(settings)" in source and "connect_writer" not in source
 
 
+def test_status_only_reads() -> None:
+    """status connects read-only, like eval, and never saves job state."""
+    import vecshift.cli_status as cli_status
+
+    source = Path(cli_status.__file__).read_text(encoding="utf-8")
+    assert "pgvector.connect(settings)" in source and "connect_writer" not in source
+    assert ".save(" not in source
+
+
+def test_secrets_typed_into_init_are_hidden_and_saved_only_on_request() -> None:
+    import vecshift.cli_init as cli_init
+
+    source = Path(cli_init.__file__).read_text(encoding="utf-8")
+    assert 'typer.prompt("Connection string", hide_input=True)' in source
+    key_prompt = source[source.index("def _model_key") :]
+    assert "hide_input=True" in key_prompt
+    # Saving asks first, and defaults to no.
+    save = source[source.index("def _offer_to_save") : source.index("def _keep_out_of_git")]
+    assert "typer.confirm(" in save and "default=False" in save
+
+
+def test_env_files_are_private_and_never_override_the_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from vecshift import envfile
+
+    path = tmp_path / ".env"
+    envfile.save(path, "VECSHIFT_DSN", "postgresql://u:" + KEY + "@h/db")
+    assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+    monkeypatch.setenv("VECSHIFT_DSN", "from-the-shell")
+    assert envfile.load(path) == []
+    assert os.environ["VECSHIFT_DSN"] == "from-the-shell"
+
+
 # --- Images and workflows run pinned, least-privileged code
 
 REPO = Path(__file__).resolve().parent.parent

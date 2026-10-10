@@ -30,6 +30,7 @@ in the vecshift container:
    and writes `demo/out/eval.html`. If the verdict isn't GO, the demo stops here.
 7. **`vecshift cutover`** renames the columns in one transaction, so `embedding` now holds
    the new vectors.
+8. **`vecshift status`** confirms the stage and says what to do next.
 
 Afterwards you can switch back, or run any other command, against the same database:
 

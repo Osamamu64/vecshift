@@ -36,7 +36,21 @@ by one model can't be compared with vectors from another.
 
 ## The job file
 
-`vecshift init` writes a commented `vecshift.yaml`. The full set of settings:
+`vecshift init` writes a commented `vecshift.yaml`. Run it at a terminal without flags and
+it asks for what it needs:
+
+1. The connection string, unless `VECSHIFT_DSN` or `DATABASE_URL` is already set. It's
+   hidden as you type, checked by connecting, and asked again if it doesn't work.
+2. The vector column, from the ones it finds, and the column holding the source text.
+3. The model that made the current vectors (optional, for `eval`), the new model from a
+   short list or any spec, and a spending limit for paid models.
+
+It then offers to save the connection string, and any API key the model needs, to `.env`
+(see below), and to run `plan`. Saving defaults to no: nothing is written to disk unless
+you say yes. With `--table` and `--model`, `init` asks nothing, for scripts; and
+without a terminal it requires them.
+
+The full set of settings:
 
 ```yaml
 version: 1
@@ -67,6 +81,32 @@ limits:
 The file never contains credentials: the connection string comes from the environment
 variable that `dsn_env` names. Sections whose settings are all commented out use the
 defaults, and unknown settings are rejected so typos don't go unnoticed.
+
+### Settings in a `.env` file
+
+Every command reads `.env` from the current folder, if there is one, so you don't have to
+export variables in each shell:
+
+```bash
+VECSHIFT_DSN='postgresql://postgres.<ref>:<password>@<region>.pooler.supabase.com:5432/postgres'
+OPENAI_API_KEY='sk-...'
+```
+
+Variables already set in the environment win over the file. Use `--env-file PATH` to read
+another file, or `--no-env-file` to read none. Keep the file private (`chmod 600 .env`;
+vecshift warns if others can read it) and out of version control. When `init` saves to
+it, it creates the file readable by you only, and offers to add it to `.gitignore`.
+
+## Where a migration stands
+
+```bash
+vecshift status            # or --json, for scripts and UIs
+```
+
+`status` is read-only. It shows the stage (not started, filling the new column, ready to
+cut over, cut over, or done), how many rows have a new vector, the index and sync
+trigger, what `apply` has spent, the last cutover or rollback, and the command to run
+next.
 
 ## What `plan` checks
 
