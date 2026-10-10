@@ -205,9 +205,10 @@ def bench(
         from vecshift.bench import Benchmark, CorpusError, Query, plan, run
         from vecshift.bench import corpus as corpus_mod
         from vecshift.embeddings import EmbeddingCache, SpecError, parse_spec
-    except ImportError as exc:  # pragma: no cover - depends on installed extras
+    except ImportError as exc:  # pragma: no cover - a broken install
         raise _fail(
-            "Benchmarking needs extra packages.", "Run: pip install 'vecshift[bench]'"
+            "A package vecshift needs is missing.",
+            "Reinstall: pip install --force-reinstall vecshift",
         ) from exc
 
     if queries and generate_queries:
@@ -332,7 +333,8 @@ def _from_database(
         from vecshift.connectors.pgvector.documents import sample_documents
     except ImportError as exc:  # pragma: no cover
         raise _fail(
-            "The PostgreSQL driver isn't installed.", "Run: pip install 'vecshift[postgres,bench]'"
+            "The PostgreSQL driver is missing.",
+            "Reinstall: pip install --force-reinstall vecshift",
         ) from exc
     from vecshift.bench import Document
     from vecshift.bench.corpus import clip

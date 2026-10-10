@@ -1154,19 +1154,13 @@ wheels = [
 name = "vecshift"
 source = { editable = "." }
 dependencies = [
-    { name = "pydantic" },
-    { name = "pyyaml" },
-    { name = "typer" },
-]
-
-[package.optional-dependencies]
-bench = [
     { name = "httpx" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
-]
-postgres = [
     { name = "psycopg", extra = ["binary"] },
+    { name = "pydantic" },
+    { name = "pyyaml" },
+    { name = "typer" },
 ]
 
 [package.dev-dependencies]
@@ -1184,14 +1178,13 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "httpx", marker = "extra == 'bench'", specifier = ">=0.27" },
-    { name = "numpy", marker = "extra == 'bench'", specifier = ">=1.26" },
-    { name = "psycopg", extras = ["binary"], marker = "extra == 'postgres'", specifier = ">=3.2" },
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "numpy", specifier = ">=1.26" },
+    { name = "psycopg", extras = ["binary"], specifier = ">=3.2" },
     { name = "pydantic", specifier = ">=2.6" },
     { name = "pyyaml", specifier = ">=6" },
     { name = "typer", specifier = ">=0.12" },
 ]
-provides-extras = ["bench", "postgres"]
 
 [package.metadata.requires-dev]
 dev = [

@@ -7,6 +7,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- `pip install vecshift` now installs everything: the `postgres` and `bench` extras are
+  gone, and their packages are regular dependencies.
+
 ### Security
 
 - API keys are never sent over unencrypted `http://` to remote hosts, redirects are never

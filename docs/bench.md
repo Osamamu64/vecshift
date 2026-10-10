@@ -5,7 +5,7 @@ leaderboards such as MTEB average over other people's data; this tells you which
 retrieves best on yours, how fast it is, and what it costs to run.
 
 ```bash
-pip install 'vecshift[bench]'            # add postgres to sample from pgvector
+pip install vecshift
 vecshift bench --docs docs.jsonl \
   -m openai/text-embedding-3-small \
   -m openai/text-embedding-3-large,dims=256 \
