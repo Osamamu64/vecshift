@@ -112,7 +112,7 @@ jobs:
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
       - run: uv build
       - name: PyPI metadata and README render
-        run: uvx twine==6.2.0 check --strict dist/*
+        run: uvx twine==7.0.0 check --strict dist/*
       - name: The wheel installs and runs on its own
         run: |
           uv venv /tmp/wheel-test

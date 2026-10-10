@@ -7,10 +7,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Changed
+## [0.1.0]
 
-- `pip install vecshift` now installs everything: the `postgres` and `bench` extras are
-  gone, and their packages are regular dependencies.
+The first release.
 
 ### Security
 
@@ -136,3 +135,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `EmbeddingFingerprint` and model tags that identify a vector space.
 - `Capability` flags and plugin contracts for sources, targets, and embedding providers.
 - `vecshift fingerprint` and `vecshift --version` commands.
+
+[Unreleased]: https://github.com/Osamamu64/vecshift/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/Osamamu64/vecshift/releases/tag/v0.1.0
