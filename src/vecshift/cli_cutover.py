@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Annotated, Any
 
 import typer
 
+from vecshift import ui
 from vecshift.cli_plan import DEFAULT_JOB, _fail, load
 from vecshift.cli_style import finding_lines
 
@@ -85,7 +86,15 @@ def _locate(job_file: Path) -> _Located:
 
 
 def _confirm(message: str, yes: bool) -> None:
+    from vecshift import ui
+
     if yes:
+        return
+    if ui.fancy():
+        ui.console.print()
+        ui.note("  " + " ".join(message.split()))
+        if not ui.confirm("Continue?", default=False):
+            raise typer.Exit(1)
         return
     typer.echo(message, err=True)
     if not sys.stdin.isatty():
@@ -219,7 +228,7 @@ def cutover(
             if check or blocked:
                 return {"status": "ready" if ready.ok else "blocked", "readiness": ready}
             if not output_json:
-                typer.secho(f"vecshift cutover · {found.job.name}", bold=True)
+                ui.title("cutover", found.job.name)
             _show([f for f in ready.findings if f.severity.rank >= 1], output_json)
             where = "your machine" if found.spec.is_local else found.spec.url
             sends = (
@@ -284,24 +293,24 @@ def cutover(
             )
         )
     elif outcome["status"] in {"ready", "blocked"}:
-        typer.secho(f"vecshift cutover · {found.job.name}", bold=True)
+        ui.title("cutover", found.job.name)
         finding_lines(ready.findings)
-        verdict = (
-            ("Ready to cut over.", typer.colors.GREEN)
-            if ready.ok
-            else ("Not ready to cut over.", typer.colors.RED)
-        )
-        typer.secho(f"\n{verdict[0]}", fg=verdict[1], bold=True)
+        if ready.ok:
+            ui.verdict("Ready to cut over.")
+            if ui.fancy():
+                ui.next_step("vecshift cutover")
+        else:
+            ui.verdict("Not ready to cut over.", "error")
     else:
-        typer.secho("\nCut over.", fg=typer.colors.GREEN, bold=True)
-        typer.echo(
-            f"  {lay.table}.{lay.live} now holds {found.spec.name} vectors; the old ones are "
+        ui.verdict("Cut over.")
+        ui.detail(
+            f"{lay.table}.{lay.live} now holds {found.spec.name} vectors; the old ones are "
             f"kept in {lay.previous}."
         )
         if outcome.get("caught_up"):
-            typer.echo(f"  Embedded {outcome['caught_up']:,} late rows first.")
-        typer.echo(
-            f"\nNext: make sure your application embeds queries and new rows with "
+            ui.detail(f"Embedded {outcome['caught_up']:,} late rows first.")
+        ui.next_step(
+            f"make sure your application embeds queries and new rows with "
             f"{found.spec.name}.\nUndo with: vecshift rollback. When you're sure, drop "
             f"{lay.previous} to free its space."
         )
@@ -363,16 +372,20 @@ def rollback(
             )
         )
         return
-    typer.secho("\nRolled back.", fg=typer.colors.GREEN, bold=True)
-    typer.echo(
-        f"  {lay.table}.{lay.live} holds the old vectors again; the new ones are back in "
+    if ui.fancy():
+        ui.title("rollback", found.job.name)
+    ui.verdict("Rolled back.")
+    ui.detail(
+        f"{lay.table}.{lay.live} holds the old vectors again; the new ones are back in "
         f"{lay.target}, kept in sync for another cutover."
     )
     if missing:
-        typer.echo(
-            f"  {missing:,} rows were added or edited after cutover and have no old-model "
+        ui.detail(
+            f"{missing:,} rows were added or edited after cutover and have no old-model "
             "vector. Your application needs to embed them with the old model."
         )
+    if ui.fancy():
+        ui.console.print()
 
 
 def cleanup(
@@ -406,14 +419,18 @@ def cleanup(
                     "Drop or change them first.",
                 )
             if not yes:
-                typer.echo(
+                warning = (
                     f"Cleanup drops {lay.schema}.{lay.table}.{lay.previous} and its index. The "
-                    "old vectors are gone for good, and rollback is no longer possible.",
-                    err=True,
+                    "old vectors are gone for good, and rollback is no longer possible."
                 )
-                if not sys.stdin.isatty():
-                    raise _fail("Not dropping anything without confirmation.", "Pass --yes.")
-                typed = typer.prompt(f"Type {lay.previous} to confirm", err=True, default="")
+                if ui.fancy():
+                    ui.warn(warning)
+                    typed = ui.text(f"Type {lay.previous} to confirm")
+                else:
+                    typer.echo(warning, err=True)
+                    if not sys.stdin.isatty():
+                        raise _fail("Not dropping anything without confirmation.", "Pass --yes.")
+                    typed = typer.prompt(f"Type {lay.previous} to confirm", err=True, default="")
                 if typed != lay.previous:
                     raise _fail("That didn't match, so nothing was dropped.")
             switch.cleanup()
@@ -428,4 +445,8 @@ def cleanup(
     if output_json:
         typer.echo(json.dumps({"status": "cleaned_up", "dropped": lay.previous}))
     else:
-        typer.secho(f"\nDropped {lay.previous}. The migration is complete.", fg=typer.colors.GREEN)
+        if ui.fancy():
+            ui.title("cleanup", found.job.name)
+        ui.verdict(f"Dropped {lay.previous}. The migration is complete.")
+        if ui.fancy():
+            ui.console.print()

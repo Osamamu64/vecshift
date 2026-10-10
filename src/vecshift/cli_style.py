@@ -28,6 +28,11 @@ def wrap(text: str) -> str:
 
 def finding_lines(findings: Sequence[Finding]) -> None:
     """Print findings, most severe first, in the doctor style."""
+    from vecshift import ui
+
+    if ui.fancy():
+        ui.findings(findings)
+        return
     for finding in sorted(findings, key=lambda f: -f.severity.rank):
         label, color, _ = STYLE[finding.severity]
         typer.secho(f"{label}  ", fg=color, bold=True, nl=False)

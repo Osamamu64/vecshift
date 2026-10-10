@@ -79,8 +79,89 @@ def _money(value: float | None) -> str:
     return "<$0.01" if value < 0.01 else f"~${value:,.2f}"
 
 
-def _render(plan: Plan) -> None:
+def _estimate_rows(plan: Plan) -> list[tuple[str, str, str]]:
     e = plan.estimates
+    rows = "—" if e.rows is None else (f"{e.rows:,}" if e.rows_exact else f"~{e.rows:,}")
+    lines = [
+        ("Rows to embed", rows, "exact" if e.rows_exact else "from table statistics"),
+        ("Tokens", "~" + _compact(e.tokens) if e.tokens else "—", e.tokens_method or ""),
+        ("Cost", _money(e.cost_usd), ""),
+        ("Requests", f"{e.requests:,}" if e.requests is not None else "—", ""),
+        ("Duration", _duration(e.seconds), e.seconds_method or "add a rate limit or --probe"),
+        (
+            "New column",
+            _size(e.new_bytes),
+            f"old column {_size(e.old_bytes)}" if e.old_bytes else "",
+        ),
+    ]
+    if e.index_memory_bytes:
+        lines.append(
+            (
+                "Index build",
+                f"~{_size(e.index_memory_bytes)}",
+                f"maintenance_work_mem is {_size(e.maintenance_work_mem)}",
+            )
+        )
+    return lines
+
+
+CHANGE_MARKS = {
+    "add_column": ("+", "green"),
+    "trigger": ("+", "green"),
+    "embed": ("~", "#3987e5"),
+    "index": ("+", "green"),
+    "cutover": ("⇄", "magenta"),
+}
+
+
+def _render_fancy(plan: Plan) -> None:
+    from rich.padding import Padding
+    from rich.text import Text
+
+    from vecshift import ui
+
+    dims = f"{plan.dimensions:,}" if plan.dimensions else "?"
+    source_note = {
+        "spec": "set in the spec",
+        "known": "this model's size",
+        "probe": "measured",
+        None: "unknown",
+    }[plan.dimensions_source]
+    ui.title("plan", plan.job)
+    ui.kv(
+        [
+            ("Source", plan.source, ""),
+            ("Model", Text.assemble(plan.model, (" → ", "dim"), f"{dims} dimensions"), source_note),
+        ]
+    )
+    ui.section("Changes")
+    for change in plan.changes:
+        mark, colour = CHANGE_MARKS.get(change.kind, ("·", "dim"))
+        ui.console.print(Text.assemble((f"  {mark} ", f"bold {colour}"), change.summary))
+        if change.sql:
+            ui.sql(change.sql)
+        if change.note:
+            ui.console.print(Padding(Text(change.note, style="dim"), (0, 0, 0, 4)))
+    ui.section("Estimates")
+    ui.kv(_estimate_rows(plan))
+    if plan.findings:
+        ui.section("Checks")
+        ui.findings(plan.findings)
+    if plan.ok:
+        ui.verdict("Ready to apply.")
+        ui.next_step("vecshift apply")
+    else:
+        noun = "error" if plan.errors == 1 else "errors"
+        ui.verdict(f"Fix {plan.errors} {noun} before applying.", "error")
+        ui.console.print()
+
+
+def _render(plan: Plan) -> None:
+    from vecshift import ui
+
+    if ui.fancy():
+        _render_fancy(plan)
+        return
     dims = f"{plan.dimensions:,}" if plan.dimensions else "?"
     source_note = {
         "spec": "set in the spec",
@@ -102,31 +183,7 @@ def _render(plan: Plan) -> None:
             typer.secho(_note(change.note), dim=True)
 
     typer.secho("\nEstimates", bold=True)
-    rows = "—" if e.rows is None else (f"{e.rows:,}" if e.rows_exact else f"~{e.rows:,}")
-    lines = [
-        ("Rows to embed", rows, "exact" if e.rows_exact else "from table statistics"),
-        ("Tokens", "~" + _compact(e.tokens) if e.tokens else "—", e.tokens_method or ""),
-        (
-            "Cost",
-            _money(e.cost_usd),
-            "",
-        ),
-        ("Requests", f"{e.requests:,}" if e.requests is not None else "—", ""),
-        ("Duration", _duration(e.seconds), e.seconds_method or "add a rate limit or --probe"),
-        (
-            "New column",
-            _size(e.new_bytes),
-            f"old column {_size(e.old_bytes)}" if e.old_bytes else "",
-        ),
-    ]
-    if e.index_memory_bytes:
-        lines.append(
-            (
-                "Index build",
-                f"~{_size(e.index_memory_bytes)}",
-                f"maintenance_work_mem is {_size(e.maintenance_work_mem)}",
-            )
-        )
+    lines = _estimate_rows(plan)
     width = max(len(k) for k, _, _ in lines)
     for key, value, note in lines:
         typer.echo(f"  {key:<{width}}  {value:<10}  " + typer.style(note, dim=True))

@@ -9,10 +9,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- A new look at the terminal: a gradient block wordmark, numbered steps, and arrow-key
-  menus in `vecshift init` (with hidden input for secrets), and `vecshift status` as a
-  panel with the migration's progress from plan to cleanup. Off a terminal, output stays
-  plain and prompts fall back to typed answers, as before.
+- A new look at the terminal, across every command: a gradient block wordmark, numbered
+  steps and arrow-key menus in `vecshift init` (with hidden input for secrets), a panel
+  with the migration's progress in `vecshift status`, a live progress bar in `apply`,
+  highlighted SQL in `plan`, tables in `eval` and `bench`, and consistent headers,
+  findings, verdicts, and next steps everywhere. Off a terminal, output stays plain and
+  prompts fall back to typed answers, as before.
 
 ## [0.2.0] - 2026-10-10
 

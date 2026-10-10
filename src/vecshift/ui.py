@@ -117,7 +117,9 @@ def success(message: str) -> None:
 
 def warn(message: str) -> None:
     if fancy():
-        console.print(Text.assemble(("! ", "bold yellow"), (message, "yellow")))
+        stripped = message.lstrip(" ")
+        indent = len(message) - len(stripped)
+        _indented(Text.assemble(("▲ ", "bold yellow"), (stripped, "yellow")), indent)
     else:
         typer.secho(message, fg=typer.colors.YELLOW)
 
@@ -133,9 +135,16 @@ def error(message: str, hint: str | None = None) -> None:
             typer.echo(f"→ {hint}")
 
 
+def _indented(text: Text, indent: int) -> None:
+    from rich.padding import Padding
+
+    console.print(Padding(text, (0, 0, 0, indent)))
+
+
 def note(message: str) -> None:
     if fancy():
-        console.print(Text(message, style="dim"))
+        stripped = message.lstrip(" ")
+        _indented(Text(stripped, style="dim"), len(message) - len(stripped))
     else:
         typer.echo(message)
 
@@ -266,3 +275,158 @@ def confirm(message: str, default: bool = True) -> bool:
             _answer(questionary.confirm(message, default=default, qmark="?", style=_style()).ask())
         )
     return typer.confirm(message, default=default)
+
+
+# --- reports
+#
+# Each helper prints the styled version at a colour terminal and the plain text vecshift
+# has always printed everywhere else, so logs, CI, and anything parsing output see no change.
+
+
+def title(command: str, subject: str = "") -> None:
+    """The first line of a command's report: ``· • ● ●  plan · documents-reembed``."""
+    if fancy():
+        line = Text("\n  ")
+        line.append_text(_mark())
+        line.append(f" {command}", style="bold")
+        if subject:
+            line.append(f"  {subject}", style="dim")
+        console.print(line)
+        console.print()
+    else:
+        typer.secho(f"vecshift {command}" + (f" · {subject}" if subject else ""), bold=True)
+
+
+def section(name: str) -> None:
+    if fancy():
+        console.print()
+        console.rule(Text(name, style="bold"), align="left", style=MUTED)
+    else:
+        typer.secho(f"\n{name}", bold=True)
+
+
+def kv(rows: Sequence[tuple[str, str | Text, str]], indent: int = 2) -> None:
+    """Aligned ``label  value  note`` rows."""
+    if not rows:
+        return
+    if fancy():
+        from rich.padding import Padding
+        from rich.table import Table
+
+        grid = Table.grid(padding=(0, 2))
+        grid.add_column(style="dim", no_wrap=True)
+        grid.add_column()
+        for label, value, note in rows:
+            cell = value.copy() if isinstance(value, Text) else Text(value)
+            if note:
+                cell.append(f"  {note}", style="dim")
+            grid.add_row(label, cell)
+        console.print(Padding(grid, (0, 0, 0, indent)))
+        return
+    width = max(len(label) for label, _, _ in rows)
+    for label, value, note in rows:
+        plain = value.plain if isinstance(value, Text) else value
+        line = f"{' ' * indent}{label:<{width}}  {plain:<10}"
+        typer.echo(line + ("  " + typer.style(note, dim=True) if note else ""))
+
+
+SEVERITY_STYLE = {
+    "error": ("✖", "red", "ERROR"),
+    "warning": ("▲", "yellow", "WARNING"),
+    "info": ("●", ACCENT, "INFO"),
+    "ok": ("✔", "green", "OK"),
+}
+
+
+def findings(items: Sequence[Any]) -> None:
+    """Findings, most severe first: icon and title, then the detail and the fix."""
+    from rich.padding import Padding
+
+    for finding in sorted(items, key=lambda f: -f.severity.rank):
+        icon, colour, _ = SEVERITY_STYLE[finding.severity.value]
+        console.print(
+            Text.assemble(
+                ("  " + icon + " ", f"bold {colour}"), (finding.title.replace("`", ""), "bold")
+            )
+        )
+        console.print(Padding(Text(finding.detail.replace("`", "")), (0, 0, 0, 4)))
+        if finding.hint:
+            console.print(
+                Padding(Text(f"→ {finding.hint.replace('`', '')}", style=ACCENT), (0, 0, 0, 4))
+            )
+
+
+def verdict(message: str, kind: str = "ok") -> None:
+    """The outcome of a command, in its colour."""
+    colour = {"ok": "green", "warn": "yellow", "error": "red", "info": ACCENT}[kind]
+    if fancy():
+        icon = {"ok": "✔", "warn": "▲", "error": "✖", "info": "●"}[kind]
+        console.print()
+        console.print(Text.assemble((f"  {icon} ", f"bold {colour}"), (message, f"bold {colour}")))
+    else:
+        fg = {
+            "ok": typer.colors.GREEN,
+            "warn": typer.colors.YELLOW,
+            "error": typer.colors.RED,
+            "info": typer.colors.BLUE,
+        }[kind]
+        typer.echo()
+        typer.secho(message, fg=fg, bold=True)
+
+
+def detail(message: str) -> None:
+    """A supporting line under a verdict or title."""
+    if fancy():
+        _indented(Text(message), 4)
+    else:
+        typer.echo(f"  {message}")
+
+
+def next_step(message: str) -> None:
+    if fancy():
+        from rich.table import Table
+
+        grid = Table.grid(padding=(0, 2))
+        grid.add_column(no_wrap=True)
+        grid.add_column()
+        grid.add_row(Text("  ➜ Next", style=f"bold {ACCENT}"), Text(message))
+        console.print()
+        console.print(grid)
+        console.print()
+    else:
+        typer.echo(f"\nNext: {message}")
+
+
+def sql(code: str) -> None:
+    """A SQL statement, highlighted."""
+    if fancy():
+        from rich.padding import Padding
+        from rich.syntax import Syntax
+
+        console.print(
+            Padding(
+                Syntax(code, "sql", theme="monokai", background_color="default", word_wrap=True),
+                (0, 0, 0, 6),
+            )
+        )
+    else:
+        typer.secho(f"      {code}", fg=typer.colors.CYAN)
+
+
+def table(
+    headers: Sequence[str],
+    rows: Sequence[Sequence[str | Text]],
+    right: frozenset[int] = frozenset(),
+) -> None:
+    """A table with a header row. Only for a colour terminal; callers print plain otherwise."""
+    from rich import box
+    from rich.table import Table
+
+    grid = Table(
+        box=box.SIMPLE_HEAD, header_style=f"bold {ACCENT}", border_style=MUTED, padding=(0, 1)
+    )
+    for i, header in enumerate(headers):
+        grid.add_column(header, justify="right" if i in right else "left", no_wrap=i == 1)
+    for row in rows:
+        grid.add_row(*row)
+    console.print(grid)

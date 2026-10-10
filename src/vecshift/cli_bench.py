@@ -6,7 +6,7 @@ import asyncio
 import json
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, Any
 
 import typer
 
@@ -28,7 +28,12 @@ def _fail(message: str, hint: str | None = None) -> typer.Exit:
 
 
 def _note(message: str) -> None:
-    typer.secho(message, err=True, dim=True)
+    from vecshift import ui
+
+    if ui.fancy():
+        ui.note(f"  · {message}")
+    else:
+        typer.secho(message, err=True, dim=True)
 
 
 def money(value: float | None) -> str:
@@ -48,8 +53,30 @@ def _ms(value: float | None) -> str:
 
 
 def _confirm(items: list[PlanItem], generator: ModelSpec | None, n_docs: int, yes: bool) -> None:
+    from vecshift import ui
+
     remote = [i for i in items if not i.spec.is_local]
     remote_gen = generator is not None and not generator.is_local
+    if ui.fancy():
+        ui.title("bench")
+        rows: list[list[str | Any]] = [
+            [
+                item.spec.name,
+                f"~{item.est_tokens:,}",
+                money(item.est_cost) if item.est_cost is not None else "unknown price",
+                "local" if item.spec.is_local else (item.spec.url or ""),
+            ]
+            for item in items
+        ]
+        if generator is not None:
+            rows.append([generator.name, "generates queries", "", generator.url or ""])
+        ui.table(["Model", "Tokens", "Cost", "Where"], rows, right=frozenset({1, 2}))
+        if not remote and not remote_gen:
+            return
+        ui.warn(f"  This sends the text of {n_docs:,} sampled documents to the services above.")
+        if not yes and not ui.confirm("Continue?", default=False):
+            raise typer.Exit(1)
+        return
     typer.echo("Plan", err=True)
     for item in items:
         where = "local" if item.spec.is_local else (item.spec.url or "")
@@ -74,13 +101,17 @@ def _confirm(items: list[PlanItem], generator: ModelSpec | None, n_docs: int, ye
 
 
 def _render(result: BenchResult) -> None:
+    from vecshift import ui
     from vecshift.bench.runner import ModelResult
 
-    typer.secho(
-        f"vecshift bench · {result.documents:,} documents, {result.queries:,} queries "
-        f"({result.query_source}) from {result.source}",
-        bold=True,
-    )
+    fancy = ui.fancy()
+
+    if not fancy:
+        typer.secho(
+            f"vecshift bench · {result.documents:,} documents, {result.queries:,} queries "
+            f"({result.query_source}) from {result.source}",
+            bold=True,
+        )
     rows: list[tuple[str, ...]] = []
     ranked = result.ranked()
     for rank, m in enumerate(ranked, 1):
@@ -115,7 +146,23 @@ def _render(result: BenchResult) -> None:
         "Per 1M docs",
         "Per 1M vecs",
     )
-    if rows:
+    if rows and fancy:
+        from rich.text import Text
+
+        ui.section(
+            f"Results · {result.documents:,} documents, {result.queries:,} queries "
+            f"({result.query_source}) from {result.source}"
+        )
+        styled: list[list[str | Text]] = [
+            [
+                Text(r[0], style="bold green" if r[0] == "1" else "dim"),
+                Text(r[1], style="bold"),
+                *r[2:],
+            ]
+            for r in rows
+        ]
+        ui.table(header, styled, right=frozenset({0, 2, 3, 4, 5, 6, 7, 8}))
+    elif rows:
         widths = [max(len(r[i]) for r in [header, *rows]) for i in range(len(header))]
         right = {0, 2, 3, 4, 5, 6, 7, 8}
 
@@ -132,9 +179,17 @@ def _render(result: BenchResult) -> None:
 
     failed: list[ModelResult] = [m for m in ranked if m.error]
     for m in failed:
-        typer.secho(f"\n✖ {m.name} failed: {m.error}", fg=typer.colors.RED)
+        if fancy:
+            ui.error(f"{m.name} failed: {m.error}")
+        else:
+            typer.secho(f"\n✖ {m.name} failed: {m.error}", fg=typer.colors.RED)
     for note in result.notes:
-        typer.secho(f"\n{note}", dim=True)
+        if fancy:
+            ui.note(f"  {note}")
+        else:
+            typer.secho(f"\n{note}", dim=True)
+    if fancy:
+        ui.console.print()
 
 
 def bench(

@@ -121,7 +121,39 @@ class FailOn(StrEnum):
     ERROR = "error"
 
 
+def _render_fancy(report: Report, connection: str) -> None:
+    from rich.text import Text
+
+    from vecshift import ui
+
+    dims = f"({report.declared_dimensions})" if report.declared_dimensions else ""
+    rows = f"~{report.estimated_rows:,}" if report.estimated_rows is not None else "unknown"
+    ui.title("doctor", f"{report.store} via {connection}")
+    ui.kv(
+        [
+            ("Target", Text.assemble(report.target, (f"  {report.vector_type}{dims}", "dim")), ""),
+            ("Rows", rows, f"inspected {report.sample_rows:,}, {report.sample_method}"),
+        ]
+    )
+    ui.section("Findings")
+    ui.findings(report.sorted_findings())
+    summary = Text("  ")
+    for severity, (_, _, name) in _STYLE.items():
+        n = report.count(severity)
+        icon, colour, _ = ui.SEVERITY_STYLE[severity.value]
+        plural = "s" if n != 1 and name in ("error", "warning") else ""
+        summary.append(f"{icon} {n} {name}{plural}   ", style=colour if n else "dim")
+    ui.console.print()
+    ui.console.print(summary)
+    ui.console.print()
+
+
 def _render(report: Report, connection: str) -> None:
+    from vecshift import ui
+
+    if ui.fancy():
+        _render_fancy(report, connection)
+        return
     dims = f"({report.declared_dimensions})" if report.declared_dimensions else ""
     rows = f"~{report.estimated_rows:,}" if report.estimated_rows is not None else "unknown"
     typer.secho(f"vecshift doctor · {report.store} via {connection}", bold=True)
