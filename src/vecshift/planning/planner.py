@@ -431,8 +431,8 @@ def build_plan(
             Change(
                 "trigger",
                 f"add a trigger that clears {job.target.column} when {profile.text_field} changes",
-                note="So rows edited during the migration get re-embedded. Cutover and rollback "
-                "remove it.",
+                note="So rows edited during the migration get re-embedded. Cutover moves it to "
+                "the old column, and cleanup removes it.",
             )
         )
     rows_text = f"~{est.rows:,}" if est.rows is not None else "all"
@@ -464,9 +464,9 @@ def build_plan(
     plan.changes.append(
         Change(
             "cutover",
-            f"later, swap columns: {old} → {old}_previous, {job.target.column} → {old}",
-            note="Renames in one transaction, so searches switch atomically. Rollback renames "
-            "them back.",
+            f"later, with vecshift cutover: {old} → {old}_old, {job.target.column} → {old}",
+            note="Renames in one transaction, so searches switch atomically and your SQL keeps "
+            "working. Rollback renames them back; cleanup drops the old column.",
         )
     )
 
