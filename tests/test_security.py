@@ -355,6 +355,26 @@ def test_env_files_are_private_and_never_override_the_environment(
     assert os.environ["VECSHIFT_DSN"] == "from-the-shell"
 
 
+def test_qdrant_keys_stay_private(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The Qdrant API key comes from the environment, never travels over plain http to
+    another host, never follows a redirect, and never appears in a message."""
+    from vecshift.connectors import qdrant
+
+    monkeypatch.setenv("QDRANT_API_KEY", KEY)
+    with pytest.raises(qdrant.QdrantError) as caught:
+        qdrant.prepare("http://qdrant.example.com")
+    assert KEY not in str(caught.value) and KEY not in (caught.value.hint or "")
+    with pytest.raises(qdrant.QdrantError, match="credentials"):
+        qdrant.prepare("https://user:secret@qdrant.example.com")
+    redirect = httpx.MockTransport(lambda r: httpx.Response(307, headers={"location": "x"}))
+    client = qdrant.QdrantClient(qdrant.prepare("https://q.example.com"), transport=redirect)
+    with pytest.raises(qdrant.QdrantError, match="redirect") as caught:
+        client.collections()
+    assert KEY not in str(caught.value)
+    source = (Path(qdrant.__file__).parent / "client.py").read_text(encoding="utf-8")
+    assert "follow_redirects=False" in source
+
+
 # --- Images and workflows run pinned, least-privileged code
 
 REPO = Path(__file__).resolve().parent.parent

@@ -75,14 +75,22 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
+      qdrant:
+        # Qdrant's image through the same mirror, pinned by digest.
+        image: mirror.gcr.io/qdrant/qdrant:v1.19.2@sha256:b7b0444c4c351c970b98e90a6f89c2ee4287c65b44e52b4cb503fa5b2aa927ad
+        ports:
+          - 6333:6333
     env:
       VECSHIFT_TEST_PG_DSN: postgresql://postgres:postgres@localhost:5432/postgres
+      VECSHIFT_TEST_QDRANT_URL: http://localhost:6333
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
       - run: uv sync --locked
+      - name: Wait for Qdrant
+        run: curl -fsS --retry 15 --retry-connrefused --retry-delay 1 http://localhost:6333/readyz
       - run: uv run pytest tests/integration
 
   security:
