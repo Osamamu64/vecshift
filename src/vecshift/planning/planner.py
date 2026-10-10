@@ -191,6 +191,30 @@ def build_plan(
                 hint="Connect as the table owner. On Supabase that's usually postgres.",
             )
         )
+    if target.partitioned:
+        findings.append(
+            Finding(
+                "plan.partitioned",
+                Severity.ERROR,
+                "Partitioned tables aren't supported yet",
+                "PostgreSQL can't build an index concurrently on a partitioned table, and apply "
+                "only builds indexes that way so writes never block.",
+                hint="Migrate each partition as its own table for now.",
+            )
+        )
+    if target.row_security:
+        findings.append(
+            Finding(
+                "plan.row_security",
+                Severity.ERROR,
+                "Row-level security limits which rows apply can reach",
+                "The connecting role is subject to the table's policies (the table forces "
+                "row-level security, or the role isn't its owner), so apply could skip rows "
+                "it can't see and still report success.",
+                hint="Connect as a role with BYPASSRLS, or turn off FORCE ROW LEVEL SECURITY "
+                "for the migration.",
+            )
+        )
     if target.previous_column_exists and not target.column_exists:
         findings.append(
             Finding(
@@ -280,7 +304,7 @@ def build_plan(
     from vecshift.doctor.checks import run_checks
 
     for finding in run_checks(profile).findings:
-        if finding.id in CARRIED:
+        if finding.id in CARRIED and not target.row_security:
             findings.append(finding)
 
     # --- Estimates.

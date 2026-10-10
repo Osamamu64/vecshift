@@ -4,7 +4,7 @@ from pathlib import Path
 import httpx
 import psycopg
 import pytest
-from psycopg.conninfo import conninfo_to_dict
+from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from typer.testing import CliRunner
 
 from tests.integration.test_pgvector_doctor import create_healthy
@@ -147,3 +147,65 @@ def test_generated_sql_quotes_keywords(
         "SELECT count(*) FROM pg_attribute WHERE attrelid = 'public.documents'::regclass "
         "AND attname = 'order'"
     ).fetchone() == (1,)
+
+
+def test_partitioned_tables_are_refused(
+    db_dsn: str, setup: psycopg.Connection, tmp_path: Path
+) -> None:
+    setup.execute(
+        "CREATE TABLE public.documents (id bigserial, content text, "
+        "embedding extensions.vector(3), PRIMARY KEY (id)) PARTITION BY RANGE (id)"
+    )
+    setup.execute(
+        "CREATE TABLE public.documents_a PARTITION OF public.documents "
+        "FOR VALUES FROM (0) TO (1000)"
+    )
+    setup.execute(
+        "INSERT INTO public.documents (content, embedding) "
+        "SELECT 'chunk ' || g, '[1,0,0]' FROM generate_series(1, 50) g"
+    )
+    code, data = plan(job_file(tmp_path), db_dsn)
+    assert code == 1 and "plan.partitioned" in finding_ids(data)
+
+
+def _role(setup: psycopg.Connection, db_dsn: str, *, bypass: bool) -> str:
+    import uuid
+
+    name = f"owner_{uuid.uuid4().hex[:8]}"
+    setup.execute(
+        f"CREATE ROLE {name} LOGIN PASSWORD 'pw' {'BYPASSRLS' if bypass else 'NOBYPASSRLS'}"
+    )
+    setup.execute(f"GRANT USAGE ON SCHEMA extensions TO {name}")
+    setup.execute(f"GRANT USAGE, CREATE ON SCHEMA public TO {name}")
+    setup.execute(f"ALTER TABLE public.documents OWNER TO {name}")
+    return make_conninfo("", **{**conninfo_to_dict(db_dsn), "user": name, "password": "pw"})
+
+
+@pytest.mark.parametrize(
+    ("force", "bypass", "superuser", "refused"),
+    [
+        (True, False, False, True),  # the owner is bound by forced policies
+        (True, True, False, False),  # BYPASSRLS always sees every row
+        (True, False, True, False),  # so does a superuser
+        (False, False, False, False),  # owners bypass policies unless they're forced
+    ],
+)
+def test_row_security_that_hides_rows_is_refused(
+    db_dsn: str,
+    setup: psycopg.Connection,
+    tmp_path: Path,
+    force: bool,
+    bypass: bool,
+    superuser: bool,
+    refused: bool,
+) -> None:
+    create_healthy(setup, rows=60)
+    setup.execute("ALTER TABLE public.documents ENABLE ROW LEVEL SECURITY")
+    if force:
+        setup.execute("ALTER TABLE public.documents FORCE ROW LEVEL SECURITY")
+    setup.execute("CREATE POLICY half ON public.documents USING (id % 2 = 0)")
+    owner_dsn = _role(setup, db_dsn, bypass=bypass)
+    _, data = plan(job_file(tmp_path), db_dsn if superuser else owner_dsn)
+    assert ("plan.row_security" in finding_ids(data)) is refused
+    if refused:
+        assert "access.row_security" not in finding_ids(data), "one finding, not two"

@@ -77,6 +77,8 @@ errors, so it can gate a CI job.
 | Check | Severity |
 |---|---|
 | No text column to re-embed | error |
+| A partitioned table (not supported yet) | error |
+| Row-level security applies to the connecting role, so it can't reach every row | error |
 | No primary key (apply needs a stable ID to write back and resume) | error |
 | The connecting role doesn't own the table, which adding a column requires | error |
 | The target column exists with a different type or size | error |
@@ -204,8 +206,11 @@ grant usage on schema extensions to vecshift_migrator;
 grant postgres to vecshift_migrator;   -- or whichever role owns the table
 ```
 
-Table owners bypass row-level security unless the table uses `FORCE ROW LEVEL SECURITY`,
-so `apply` sees every row. Revoke the membership once the migration is done.
+Table owners bypass row-level security, so `apply` reaches every row. If the table uses
+`FORCE ROW LEVEL SECURITY`, policies bind the owner too, and `apply` could skip rows it can't
+see while reporting success, so `plan` refuses. Connect as a role with `BYPASSRLS` (or a
+superuser), or turn off `FORCE ROW LEVEL SECURITY` for the migration. Revoke any membership
+or attribute you granted once the migration is done.
 
 ## Cutting over
 
@@ -219,6 +224,7 @@ vecshift cutover              # asks first; --yes skips the question
 | Check | Severity |
 |---|---|
 | `apply` hasn't run, or the table was already cut over | error |
+| A partitioned table, or row-level security hiding rows from the connecting role | error |
 | `<column>_old` already exists (left from an earlier migration) | error |
 | Rows with text but no new vector | error for `--check`; `cutover` embeds them first |
 | The vector index on the new column isn't built | error |

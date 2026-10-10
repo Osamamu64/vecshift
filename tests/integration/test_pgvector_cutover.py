@@ -429,3 +429,38 @@ def test_budget_during_the_final_catch_up(
     result = run("cutover", path, db_dsn, "--yes")
     assert result.exit_code == 2 and "Nothing was switched" in result.output
     assert columns(setup) == {"embedding": 3, "embedding_v2": DIMS}
+
+
+def test_cutover_refuses_when_row_security_hides_rows(
+    db_dsn: str, setup: psycopg.Connection, applied: Path
+) -> None:
+    """Rows a role can't see would pass the final check without a vector."""
+    from tests.integration.test_pgvector_plan import _role
+
+    owner = _role(setup, db_dsn, bypass=False)
+    setup.execute("ALTER TABLE public.documents ENABLE ROW LEVEL SECURITY")
+    setup.execute("ALTER TABLE public.documents FORCE ROW LEVEL SECURITY")
+    setup.execute("CREATE POLICY half ON public.documents USING (id % 2 = 0)")
+    setup.execute("UPDATE public.documents SET content = 'changed' WHERE id = 1")  # hidden row
+    result = run("cutover", applied, owner, "--check", "--json")
+    assert result.exit_code == 1, result.output
+    assert "cutover.row_security" in {f["id"] for f in json.loads(result.stdout)["findings"]}
+
+
+def test_cutover_refuses_partitioned_tables(
+    db_dsn: str,
+    setup: psycopg.Connection,
+    tmp_path: Path,
+    model_url: str,  # noqa: F811
+) -> None:
+    setup.execute(
+        "CREATE TABLE public.documents (id bigserial, content text, metadata jsonb, "
+        "embedding extensions.vector(3), PRIMARY KEY (id)) PARTITION BY RANGE (id)"
+    )
+    setup.execute(
+        "CREATE TABLE public.documents_a PARTITION OF public.documents FOR VALUES FROM (0) TO (100)"
+    )
+    setup.execute(f"ALTER TABLE public.documents ADD COLUMN embedding_v2 extensions.vector({DIMS})")
+    result = run("cutover", apply_job(tmp_path, model_url), db_dsn, "--check", "--json")
+    assert result.exit_code == 1, result.output
+    assert "cutover.partitioned" in {f["id"] for f in json.loads(result.stdout)["findings"]}

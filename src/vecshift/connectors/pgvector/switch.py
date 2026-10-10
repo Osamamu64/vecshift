@@ -15,6 +15,7 @@ from typing import Literal
 
 from psycopg import errors, sql
 
+from vecshift.connectors.pgvector.target import table_limits
 from vecshift.connectors.pgvector.writer import SCAN_TIMEOUT_MS, Busy, PgWriter, _limits
 from vecshift.doctor.findings import Finding, Severity
 
@@ -221,6 +222,32 @@ class PgSwitch:
             )
         if stage != "applied" or live is None:
             return Readiness(stage, findings, pending, live_dims, new_dims)
+
+        relid = self.conn.execute("SELECT %s::regclass::oid", (self.writer._regclass(),)).fetchone()
+        partitioned, row_security = (
+            table_limits(self.conn, int(relid[0])) if relid else (False, False)
+        )
+        if partitioned:
+            findings.append(
+                Finding(
+                    "cutover.partitioned",
+                    Severity.ERROR,
+                    "Partitioned tables aren't supported yet",
+                    "Cutover's final check needs a concurrent index, which PostgreSQL can't "
+                    "build on a partitioned table.",
+                )
+            )
+        if row_security:
+            findings.append(
+                Finding(
+                    "cutover.row_security",
+                    Severity.ERROR,
+                    "Row-level security hides rows from this role",
+                    "Cutover couldn't confirm that every row has a new vector.",
+                    hint="Connect as a role with BYPASSRLS, or turn off FORCE ROW LEVEL "
+                    "SECURITY for the migration.",
+                )
+            )
 
         pending = self.writer.pending_count()
         if pending:

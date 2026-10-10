@@ -25,6 +25,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `plan` (and so `apply`) and `cutover --check` refuse a table whose row-level security binds
+  the connecting role, such as one with `FORCE ROW LEVEL SECURITY`. `apply` used to report
+  success while skipping the rows the role couldn't see.
+- They also refuse partitioned tables, where `apply` embedded every row and then failed to
+  build the index, since PostgreSQL can't build one concurrently on a partitioned table.
+
 - `vecshift doctor` sampled only the start of large tables, so rows written later (often by a
   newer model) could be missed. Samples are now spread across the table.
 
