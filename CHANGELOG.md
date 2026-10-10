@@ -7,6 +7,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-10
+
 ### Changed
 
 - A new look at the terminal, across every command: a gradient block wordmark, numbered
@@ -15,6 +17,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   highlighted SQL in `plan`, tables in `eval` and `bench`, and consistent headers,
   findings, verdicts, and next steps everywhere. Off a terminal, output stays plain and
   prompts fall back to typed answers, as before.
+- New dependency: `questionary`, for the arrow-key menus.
 
 ## [0.2.0] - 2026-10-10
 
@@ -158,6 +161,7 @@ The first release.
 - `Capability` flags and plugin contracts for sources, targets, and embedding providers.
 - `vecshift fingerprint` and `vecshift --version` commands.
 
-[Unreleased]: https://github.com/Osamamu64/vecshift/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/Osamamu64/vecshift/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/Osamamu64/vecshift/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Osamamu64/vecshift/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Osamamu64/vecshift/releases/tag/v0.1.0
