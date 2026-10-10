@@ -327,14 +327,19 @@ def test_status_only_reads() -> None:
 
 def test_secrets_typed_into_init_are_hidden_and_saved_only_on_request() -> None:
     import vecshift.cli_init as cli_init
+    import vecshift.ui as ui
 
     source = Path(cli_init.__file__).read_text(encoding="utf-8")
-    assert 'typer.prompt("Connection string", hide_input=True)' in source
+    assert 'ui.secret("Connection string")' in source
     key_prompt = source[source.index("def _model_key") :]
-    assert "hide_input=True" in key_prompt
+    assert "ui.secret(" in key_prompt and "typer.prompt(" not in source
     # Saving asks first, and defaults to no.
     save = source[source.index("def _offer_to_save") : source.index("def _keep_out_of_git")]
-    assert "typer.confirm(" in save and "default=False" in save
+    assert "ui.confirm(" in save and "default=False" in save
+    # ui.secret never echoes, in the arrow-key UI or the plain fallback.
+    helper = Path(ui.__file__).read_text(encoding="utf-8")
+    secret = helper[helper.index("def secret") : helper.index("def confirm")]
+    assert "questionary.password(" in secret and "hide_input=True" in secret
 
 
 def test_env_files_are_private_and_never_override_the_environment(

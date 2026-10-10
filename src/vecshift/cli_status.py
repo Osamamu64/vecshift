@@ -209,6 +209,101 @@ def collect(job_file: Path) -> Status:
     )
 
 
+JOURNEY = ("Plan", "Fill", "Index", "Cut over", "Clean up")
+
+
+def _progress(status: Status) -> int:
+    """How many steps of the journey are done."""
+    if status.stage == "cleaned_up":
+        return 5
+    if status.stage == "cut_over":
+        return 4
+    if status.stage == "ready":
+        return 3
+    if status.stage in {"filling", "conflict"}:
+        return 2 if status.missing == 0 else 1
+    return 0
+
+
+def _render_rich(status: Status, job_name: str) -> None:
+    from rich.panel import Panel
+    from rich.table import Table
+    from rich.text import Text
+
+    from vecshift import ui
+
+    colour = {"conflict": "red", "not_started": ui.MUTED}.get(status.stage, "green")
+    if status.stage in {"filling"}:
+        colour = ui.ACCENT
+
+    done = _progress(status)
+    journey = Text()
+    for i, name in enumerate(JOURNEY):
+        if i:
+            journey.append(" ── ", style=ui.ACCENT if i <= done else ui.MUTED)
+        if i < done:
+            journey.append(f"✔ {name}", style="green")
+        elif i == done and status.stage != "cleaned_up":
+            journey.append(f"● {name}", style=f"bold {ui.ACCENT}")
+        else:
+            journey.append(f"○ {name}", style=ui.MUTED)
+
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(style="dim", no_wrap=True)
+    grid.add_column()
+    grid.add_row("Table", status.table)
+    if status.stage == "cut_over":
+        grid.add_row(
+            "Columns", f"{status.live} holds the new vectors · old kept in {status.previous}"
+        )
+    elif status.stage == "cleaned_up":
+        grid.add_row("Columns", f"{status.live} holds the new vectors")
+    else:
+        grid.add_row("Columns", Text.assemble(status.live, (" → ", "dim"), status.new))
+    if status.rows is not None and status.missing is not None and status.filled is not None:
+        width = 28
+        full = round(status.filled * width)
+        bar = Text.assemble(
+            ("━" * full, ui.ACCENT if status.filled < 1 else "green"),
+            ("━" * (width - full), ui.MUTED),
+            (f"  {status.filled:.1%}", "bold"),
+            (f"  {status.rows - status.missing:,} of {status.rows:,} rows", "dim"),
+        )
+        grid.add_row("Vectors", bar)
+    if status.stage in {"filling", "ready", "cut_over", "conflict"}:
+        grid.add_row("Index", status.index or Text("none yet", style="yellow"))
+        grid.add_row("Sync", "trigger installed" if status.trigger else "no trigger")
+    if status.runs:
+        failed = f" · {status.failed:,} rejected" if status.failed else ""
+        grid.add_row(
+            "Apply",
+            f"{status.runs} run{'s' if status.runs != 1 else ''} · "
+            f"{status.rows_written:,} rows · ${status.spent_usd:,.2f}{failed}",
+        )
+    if status.last_event:
+        grid.add_row("Last", f"{status.last_event.get('event')} at {status.last_event.get('at')}")
+
+    body = Table.grid()
+    body.add_row(Text(f"● {STAGES[status.stage]}", style=f"bold {colour}"))
+    body.add_row("")
+    body.add_row(journey)
+    body.add_row("")
+    body.add_row(grid)
+    ui.console.print()
+    ui.console.print(
+        Panel(
+            body,
+            title=Text.assemble(("vecshift status", "bold"), (f" · {job_name}", "dim")),
+            title_align="left",
+            border_style=ui.MUTED,
+            padding=(1, 2),
+            expand=False,
+        )
+    )
+    ui.console.print(Text.assemble(("  ➜ Next  ", f"bold {ui.ACCENT}"), status.next))
+    ui.console.print()
+
+
 def _render(status: Status, job_name: str) -> None:
     typer.secho(f"vecshift status · {job_name}", bold=True)
     color = {
@@ -261,4 +356,10 @@ def status(
     if output_json:
         typer.echo(json.dumps(result.to_dict(), indent=2))
     else:
-        _render(result, load_job(job_file).name)
+        from vecshift import ui
+
+        name = load_job(job_file).name
+        if ui.fancy():
+            _render_rich(result, name)
+        else:
+            _render(result, name)

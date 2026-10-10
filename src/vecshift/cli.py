@@ -11,7 +11,7 @@ import typer
 
 from vecshift import __version__
 from vecshift.cli_style import STYLE as _STYLE
-from vecshift.cli_style import banner, warn_if_password_on_command_line
+from vecshift.cli_style import warn_if_password_on_command_line
 from vecshift.cli_style import wrap as _wrap
 from vecshift.core.fingerprint import EmbeddingFingerprint
 from vecshift.doctor import Report, Severity, run_checks
@@ -80,7 +80,9 @@ def main(
     """Safe, observable embedding migrations for any vector store."""
     _load_env_file(None if no_env_file else env_file)
     if ctx.invoked_subcommand is None:
-        banner(__version__, TAGLINE)
+        from vecshift import ui
+
+        ui.banner(__version__, TAGLINE)
         typer.echo(ctx.get_help())
 
 
