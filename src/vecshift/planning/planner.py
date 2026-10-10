@@ -191,6 +191,30 @@ def build_plan(
                 hint="Connect as the table owner. On Supabase that's usually postgres.",
             )
         )
+    if target.partitioned:
+        findings.append(
+            Finding(
+                "plan.partitioned",
+                Severity.ERROR,
+                "Partitioned tables aren't supported yet",
+                "PostgreSQL can't build an index concurrently on a partitioned table, and apply "
+                "only builds indexes that way so writes never block.",
+                hint="Migrate each partition as its own table for now.",
+            )
+        )
+    if target.row_security:
+        findings.append(
+            Finding(
+                "plan.row_security",
+                Severity.ERROR,
+                "Row-level security limits which rows apply can reach",
+                "The connecting role is subject to the table's policies (the table forces "
+                "row-level security, or the role isn't its owner), so apply could skip rows "
+                "it can't see and still report success.",
+                hint="Connect as a role with BYPASSRLS, or turn off FORCE ROW LEVEL SECURITY "
+                "for the migration.",
+            )
+        )
     if target.previous_column_exists and not target.column_exists:
         findings.append(
             Finding(
@@ -280,7 +304,7 @@ def build_plan(
     from vecshift.doctor.checks import run_checks
 
     for finding in run_checks(profile).findings:
-        if finding.id in CARRIED:
+        if finding.id in CARRIED and not target.row_security:
             findings.append(finding)
 
     # --- Estimates.
@@ -385,7 +409,8 @@ def build_plan(
                 f"maintenance_work_mem is {_size(target.maintenance_work_mem)}. pgvector builds "
                 "much more slowly once the graph no longer fits.",
                 hint=f"Raise it for the build, e.g. SET maintenance_work_mem = '{need}', if "
-                "the server has the memory to spare.",
+                "the server has the memory to spare. In Docker, also give the container that "
+                "much shared memory (--shm-size), which parallel builds use.",
             )
         )
 
@@ -406,8 +431,8 @@ def build_plan(
             Change(
                 "trigger",
                 f"add a trigger that clears {job.target.column} when {profile.text_field} changes",
-                note="So rows edited during the migration get re-embedded. Cutover and rollback "
-                "remove it.",
+                note="So rows edited during the migration get re-embedded. Cutover moves it to "
+                "the old column, and cleanup removes it.",
             )
         )
     rows_text = f"~{est.rows:,}" if est.rows is not None else "all"
@@ -439,9 +464,9 @@ def build_plan(
     plan.changes.append(
         Change(
             "cutover",
-            f"later, swap columns: {old} → {old}_previous, {job.target.column} → {old}",
-            note="Renames in one transaction, so searches switch atomically. Rollback renames "
-            "them back.",
+            f"later, with vecshift cutover: {old} → {old}_old, {job.target.column} → {old}",
+            note="Renames in one transaction, so searches switch atomically and your SQL keeps "
+            "working. Rollback renames them back; cleanup drops the old column.",
         )
     )
 

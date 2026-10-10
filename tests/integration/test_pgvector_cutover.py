@@ -429,3 +429,72 @@ def test_budget_during_the_final_catch_up(
     result = run("cutover", path, db_dsn, "--yes")
     assert result.exit_code == 2 and "Nothing was switched" in result.output
     assert columns(setup) == {"embedding": 3, "embedding_v2": DIMS}
+
+
+def test_cutover_refuses_when_row_security_hides_rows(
+    db_dsn: str, setup: psycopg.Connection, applied: Path
+) -> None:
+    """Rows a role can't see would pass the final check without a vector."""
+    from tests.integration.test_pgvector_plan import _role
+
+    owner = _role(setup, db_dsn, bypass=False)
+    setup.execute("ALTER TABLE public.documents ENABLE ROW LEVEL SECURITY")
+    setup.execute("ALTER TABLE public.documents FORCE ROW LEVEL SECURITY")
+    setup.execute("CREATE POLICY half ON public.documents USING (id % 2 = 0)")
+    setup.execute("UPDATE public.documents SET content = 'changed' WHERE id = 1")  # hidden row
+    result = run("cutover", applied, owner, "--check", "--json")
+    assert result.exit_code == 1, result.output
+    assert "cutover.row_security" in {f["id"] for f in json.loads(result.stdout)["findings"]}
+
+
+def test_cutover_refuses_partitioned_tables(
+    db_dsn: str,
+    setup: psycopg.Connection,
+    tmp_path: Path,
+    model_url: str,  # noqa: F811
+) -> None:
+    setup.execute(
+        "CREATE TABLE public.documents (id bigserial, content text, metadata jsonb, "
+        "embedding extensions.vector(3), PRIMARY KEY (id)) PARTITION BY RANGE (id)"
+    )
+    setup.execute(
+        "CREATE TABLE public.documents_a PARTITION OF public.documents FOR VALUES FROM (0) TO (100)"
+    )
+    setup.execute(f"ALTER TABLE public.documents ADD COLUMN embedding_v2 extensions.vector({DIMS})")
+    result = run("cutover", apply_job(tmp_path, model_url), db_dsn, "--check", "--json")
+    assert result.exit_code == 1, result.output
+    assert "cutover.partitioned" in {f["id"] for f in json.loads(result.stdout)["findings"]}
+
+
+def test_late_rows_are_embedded_under_the_lock(
+    db_dsn: str, setup: psycopg.Connection, applied: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On a busy table, rows always arrive after the last catch-up; cutover still converges."""
+    import vecshift.cli_cutover as cli_cutover
+    from vecshift.connectors.pgvector import switch as switch_module
+
+    real_prepare = switch_module.PgSwitch.prepare
+    catch_ups = 0
+    real_catch_up = cli_cutover._catch_up
+
+    def prepare_then_insert(self: PgSwitch) -> None:
+        real_prepare(self)
+        setup.execute(
+            "INSERT INTO public.documents (content, metadata) "
+            "SELECT 'late ' || g, '{}' FROM generate_series(1, 3) g"
+        )
+
+    def counting(*args: Any) -> int:
+        nonlocal catch_ups
+        catch_ups += 1
+        return real_catch_up(*args)
+
+    monkeypatch.setattr(switch_module.PgSwitch, "prepare", prepare_then_insert)
+    monkeypatch.setattr(cli_cutover, "_catch_up", counting)
+    result = run("cutover", applied, db_dsn, "--yes", "--json")
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)["caught_up"] == 3
+    assert catch_ups == 0, "filled in the switch, without another catch-up round"
+    assert mismatched(setup, "embedding") == 0
+    state = json.loads((applied.parent / ".vecshift" / "documents-reembed.state.json").read_text())
+    assert state["tokens"] > 0

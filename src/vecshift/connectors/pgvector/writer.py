@@ -19,7 +19,10 @@ from psycopg import errors, sql
 
 from vecshift.connectors.pgvector.target import OPCLASS_SUFFIX
 
-LOCK_TIMEOUT_MS = 5_000
+LOCK_TIMEOUT_MS = 2_000
+"""How long a schema change waits for its lock. Application writes queue behind a waiting
+lock request, so this is also the longest they can stall; retries with backoff cover a
+table that stays busy."""
 STATEMENT_TIMEOUT_MS = 120_000
 SCAN_TIMEOUT_MS = 30 * 60_000
 """For full-table counts, which can take a while on large tables."""

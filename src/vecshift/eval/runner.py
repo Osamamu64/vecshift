@@ -16,6 +16,8 @@ from vecshift.eval.metrics import ALL, K, Latency, Scores, by_slice, latency, ov
 from vecshift.eval.queries import EvalQuery
 
 Side = Literal["old", "new"]
+Hit = tuple[str, float]
+"""A row key and its distance from the query; smaller is closer."""
 SIDES: tuple[Side, Side] = ("old", "new")
 INDEX_RECALL_WARNING = 0.9
 
@@ -23,12 +25,12 @@ INDEX_RECALL_WARNING = 0.9
 class Searcher(Protocol):
     def search(
         self, side: Side, vector: Sequence[float], k: int, setting: int | None = None
-    ) -> list[str]:
-        """Top ``k`` row keys using the index, at a search setting (None: the default)."""
+    ) -> list[Hit]:
+        """Top ``k`` (key, distance) using the index, at a search setting (None: default)."""
         ...
 
-    def exact(self, side: Side, vector: Sequence[float], k: int) -> list[str]:
-        """Top ``k`` row keys by exact search, without the index."""
+    def exact(self, side: Side, vector: Sequence[float], k: int) -> list[Hit]:
+        """Top ``k`` (key, distance) by exact search, without the index."""
         ...
 
     def index(self, side: Side) -> tuple[str | None, int | None, list[int]]:
@@ -186,7 +188,7 @@ def _sweep(
             searcher.exact(side, vector, K)
             scans.append((time.perf_counter() - started) * 1000)
         return None, [SweepPoint(None, 1.0, latency(scans), current=True)]
-    found: dict[int, list[list[str]]] = {s: [] for s in settings}
+    found: dict[int, list[list[Hit]]] = {s: [] for s in settings}
     timings: dict[int, list[float]] = {s: [] for s in settings}
     # Each query runs at every setting in turn, so caches warming up during the run
     # don't flatter whichever setting happens to be measured last.
@@ -197,9 +199,34 @@ def _sweep(
             found[setting].append(searcher.search(side, vector, K, setting))
             timings[setting].append((time.perf_counter() - started) * 1000)
     points = [
-        SweepPoint(s, overlap(found[s], exact), latency(timings[s]), s == current) for s in settings
+        SweepPoint(s, index_recall(found[s], exact), latency(timings[s]), s == current)
+        for s in settings
     ]
     return method, points
+
+
+def _keys(hits: Sequence[Hit]) -> list[str]:
+    return [key for key, _ in hits]
+
+
+def index_recall(found: Sequence[Sequence[Hit]], exact: Sequence[Sequence[Hit]]) -> float:
+    """Share of the exact top 10 the index found, counting ties as found.
+
+    When several rows are exactly as close as the 10th, exact search and the index may
+    pick different ones; any row at least as close as the exact 10th is a correct answer.
+    """
+    if not exact:
+        return 1.0
+    total = 0.0
+    for got, truth in zip(found, exact, strict=True):
+        if not truth:
+            total += 1.0
+            continue
+        cutoff = truth[-1][1]
+        slack = 1e-6 * max(1.0, abs(cutoff))
+        hits = sum(1 for _, distance in got[:K] if distance <= cutoff + slack)
+        total += min(hits, len(truth)) / len(truth)
+    return total / len(exact)
 
 
 def _neighbours(
@@ -331,9 +358,9 @@ async def run(
         side.embedded = True
         on_step(f"Searching the {name} column")
         if partial:
-            ranked[name] = [searcher.exact(name, v, K) for v in vectors]
+            ranked[name] = [_keys(searcher.exact(name, v, K)) for v in vectors]
         else:
-            ranked[name] = [searcher.search(name, v, K) for v in vectors]
+            ranked[name] = [_keys(searcher.search(name, v, K)) for v in vectors]
             on_step(f"Measuring {name} search latency and index accuracy")
             side.method, side.sweep = _sweep(searcher, name, vectors[:sweep_queries])
         side.scores = by_slice(ranked[name], queries)

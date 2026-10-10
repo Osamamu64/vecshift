@@ -17,6 +17,11 @@ from vecshift.migrate.state import JobState
 
 CHARS_PER_TOKEN = 4
 MAX_PASSES = 5
+SETTLED_ROWS = 100
+SETTLED_SHARE = 0.001
+"""On a busy table some rows always change while a pass runs. Once no more than this many
+remain (at least ``SETTLED_ROWS``), apply builds the index and finishes; the stragglers get
+their vector on the next run, and cutover embeds them before it switches."""
 """Catch-up passes after the first, for rows that changed or arrived during the run."""
 MAX_CHARS = 24_000
 """Longer texts are cut to this length, inside common model input limits (about 6K tokens)."""
@@ -161,11 +166,17 @@ async def apply(
             quota = max(0, math.ceil(total * until) - done)
             pending = min(pending, quota)
         on_event(Event("start", {"pending": pending, "spent_before": spent_before}))
+        settled = max(SETTLED_ROWS, math.ceil(SETTLED_SHARE * max(pending, state.rows_written)))
 
+        backlog = pending
         for number in range(1, MAX_PASSES + 2):
             after: Any = None
             progress = 0
-            while True:
+            # A pass covers what was pending when it began; rows that arrive meanwhile wait
+            # for the next pass, so a pass ends even if inserts outpace embedding.
+            budget = backlog + chunk_rows
+            fetched = 0
+            while fetched < budget:
                 if should_stop():
                     result.remaining = writer.pending_count(tuple(state.failed))
                     return finish("stopped", "Stopped. Run apply again to continue.")
@@ -184,6 +195,7 @@ async def apply(
                 rows = writer.fetch(after, limit, tuple(state.failed))
                 if not rows:
                     break
+                fetched += len(rows)
                 after = rows[-1].key
                 if budget_usd is not None and price_per_million is not None:
                     estimate = sum(len(r.text[:MAX_CHARS]) for r in rows) / CHARS_PER_TOKEN
@@ -223,15 +235,15 @@ async def apply(
                 )
             remaining = writer.pending_count(tuple(state.failed))
             on_event(Event("pass", {"number": number, "remaining": remaining}))
-            result.remaining = remaining
+            result.remaining = backlog = remaining
             if remaining == 0 or progress == 0:
                 break
 
-        if result.remaining:
+        if result.remaining > settled:
             return finish(
                 "stopped",
-                f"{result.remaining:,} rows kept changing during the run. Run apply again "
-                "to catch up.",
+                f"{result.remaining:,} rows kept changing during the run, faster than they "
+                "could be embedded. Run apply again to catch up.",
             )
         if index is None:
             result.index = "skipped"
@@ -239,6 +251,8 @@ async def apply(
             on_event(Event("index", {"state": "building", "method": index[0]}))
             result.index = writer.build_index(index[0], index[1], state.rows_written)
             on_event(Event("index", {"state": result.index}))
+            # A big index takes minutes, and a busy table keeps changing meanwhile.
+            result.remaining = writer.pending_count(tuple(state.failed))
         sizes = writer.dimensions_in_use()
         if sizes and sizes != {dims}:
             return finish("failed", f"Found vectors of sizes {sorted(sizes)} in the new column.")
@@ -247,6 +261,12 @@ async def apply(
             if state.failed
             else ""
         )
+        if result.remaining:
+            return finish(
+                "complete",
+                f"Every row has a new vector except {result.remaining:,} that changed during "
+                f"the run; cutover (or the next apply) embeds them.{failed_note}",
+            )
         return finish("complete", f"Every row with text has a new vector.{failed_note}")
     finally:
         writer.release()

@@ -60,9 +60,32 @@ class TargetState:
     text_column: str | None = None
     previous_column_exists: bool = False
     """Whether ``<column>_old`` exists: a cutover happened and hasn't been cleaned up."""
+    partitioned: bool = False
+    """A partitioned table, which apply can't index concurrently yet."""
+    row_security: bool = False
+    """Row-level security applies to the connecting role, so it can't see or write every row."""
 
     def q(self, name: str) -> str:
         return quote_ident(name, self.keywords)
+
+
+def table_limits(conn: psycopg.Connection, relid: int) -> tuple[bool, bool]:
+    """(partitioned, row security applies to the current role).
+
+    Superusers and BYPASSRLS roles always see every row; the table's owner (or a role
+    inheriting its privileges) does too, unless the table forces row-level security.
+    """
+    row = conn.execute(
+        """
+        SELECT c.relkind = 'p',
+               c.relrowsecurity AND NOT (r.rolbypassrls OR r.rolsuper)
+               AND (c.relforcerowsecurity OR NOT pg_has_role(current_user, c.relowner, 'USAGE'))
+        FROM pg_class c, pg_roles r
+        WHERE c.oid = %s AND r.rolname = current_user
+        """,
+        (relid,),
+    ).fetchone()
+    return (bool(row[0]), bool(row[1])) if row else (False, False)
 
 
 def inspect_target(
@@ -96,6 +119,7 @@ def inspect_target(
         """,
         (source.relid,),
     ).fetchall()
+    partitioned, row_security = table_limits(conn, source.relid)
     units = {"kB": 1024, "MB": 1024**2, "8kB": 8192, "B": 1}
     mem_bytes = int(mem[0]) * units.get(mem[1] or "kB", 1024) if mem else 64 * 1024**2
     return TargetState(
@@ -108,6 +132,8 @@ def inspect_target(
         maintenance_work_mem=mem_bytes,
         keywords=frozenset(w[0] for w in words) or FALLBACK_KEYWORDS,
         primary_key=tuple(str(r[0]) for r in pk_rows),
+        partitioned=partitioned,
+        row_security=row_security,
         previous_column_exists=conn.execute(
             """
             SELECT 1 FROM pg_attribute

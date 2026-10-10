@@ -54,6 +54,7 @@ Read-only tools. No writes to your stores, no production risk.
   - [x] concurrent index build, with lock timeouts that never block the application
   - [x] `--until PERCENT` to stop part way, check, and continue
   - [ ] adaptive rate limiting that backs off on rising latency, not only on 429s
+  - [ ] partitioned tables, indexing each partition concurrently and attaching it
 - [x] `vecshift cutover`, `rollback`, and `cleanup` for pgvector and Supabase: the new
   vectors take the column name the application already uses, in one transaction
 - [x] `vecshift eval`: compare old and new vectors on your data, with a go/no-go verdict

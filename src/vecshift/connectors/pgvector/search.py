@@ -141,26 +141,31 @@ class PgSearcher:
 
     # --- searches
 
+    def _select(self, side: Side) -> sql.Composable:
+        return sql.SQL("{pk}::text, ({col} {op} %s::{type})::float8").format(
+            pk=self.pk, col=self.columns[side], op=self.operator, type=self.types[side]
+        )
+
     def search(
         self, side: Side, vector: Sequence[float], k: int, setting: int | None = None
-    ) -> list[str]:
-        """Top ``k`` keys through the index, as the application's queries would run."""
+    ) -> list[tuple[str, float]]:
+        """Top ``k`` (key, distance) through the index, as the application's queries run."""
         settings = {}
         method = self.index(side)[0]
         if setting is not None and method:
             settings[SETTINGS[method]] = str(int(setting))
-        query = self._query(side, where=None, select=sql.SQL("{}::text").format(self.pk))
-        rows = self._run(query, (self._literal(vector), k), settings)
-        return [r[0] for r in rows]
+        literal = self._literal(vector)
+        query = self._query(side, where=None, select=self._select(side))
+        rows = self._run(query, (literal, literal, k), settings)
+        return [(str(r[0]), float(r[1])) for r in rows]
 
-    def exact(self, side: Side, vector: Sequence[float], k: int) -> list[str]:
-        """Top ``k`` keys by scanning every row: the true answer an index approximates."""
-        query = self._query(
-            side, where=self._filter(side), select=sql.SQL("{}::text").format(self.pk)
-        )
+    def exact(self, side: Side, vector: Sequence[float], k: int) -> list[tuple[str, float]]:
+        """Top ``k`` (key, distance) by scanning every row: what an index approximates."""
+        literal = self._literal(vector)
+        query = self._query(side, where=self._filter(side), select=self._select(side))
         settings = {"enable_indexscan": "off", "enable_bitmapscan": "off"}
-        rows = self._run(query, (self._literal(vector), k), settings)
-        return [r[0] for r in rows]
+        rows = self._run(query, (literal, literal, k), settings)
+        return [(str(r[0]), float(r[1])) for r in rows]
 
     def index(self, side: Side) -> tuple[str | None, int | None, list[int]]:
         """The ANN index on a side's column, its current search setting, and a sweep."""

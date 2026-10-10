@@ -153,6 +153,21 @@ already uses, in one transaction. Switch the model your app embeds queries with 
 same time. See [Running a migration](docs/migrations.md) and
 [Evaluating a migration](docs/eval.md).
 
+#### Tested at scale
+
+The full workflow has been run on a **2-million-row** table (PostgreSQL 17, 4 vCPUs, 15 GB
+of RAM) while an application kept updating and inserting rows about 14 times a second:
+
+| Step | Time | Application writes meanwhile |
+|---|---|---|
+| `apply`: embed 2 million rows | depends on your embedding model and its rate limits | 60K+ writes, p99 36 ms, no errors |
+| `apply`: catch up and build the HNSW index | 4.6 min | p99 33 ms, no errors |
+| `cutover`, including rows changed during the run | 30 s | longest pause 0.29 s |
+| `rollback` | 1.7 s | longest pause 0.99 s |
+| `eval`, 200 queries | 29 s | p99 13 ms |
+
+Details in [Running a migration](docs/migrations.md#at-scale).
+
 ### Fingerprint an embedding configuration
 
 Get the fingerprint of an embedding configuration:

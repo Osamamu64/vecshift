@@ -9,16 +9,19 @@ the old ones, so rollback can say exactly which rows lack an old-model vector.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
 from psycopg import errors, sql
 
-from vecshift.connectors.pgvector.writer import SCAN_TIMEOUT_MS, Busy, PgWriter, _limits
+from vecshift.connectors.pgvector.target import table_limits
+from vecshift.connectors.pgvector.writer import SCAN_TIMEOUT_MS, Busy, PgWriter, Row, _limits
 from vecshift.doctor.findings import Finding, Severity
 
 SWITCH_SCAN_MS = 15_000
+MAX_FILL = 500
+"""Most rows cutover embeds while writes wait; more than this means catch up first."""
 """How long the final check may hold off writes before cutover gives up and retries."""
 METHODS = ("hnsw", "ivfflat")
 
@@ -222,6 +225,32 @@ class PgSwitch:
         if stage != "applied" or live is None:
             return Readiness(stage, findings, pending, live_dims, new_dims)
 
+        relid = self.conn.execute("SELECT %s::regclass::oid", (self.writer._regclass(),)).fetchone()
+        partitioned, row_security = (
+            table_limits(self.conn, int(relid[0])) if relid else (False, False)
+        )
+        if partitioned:
+            findings.append(
+                Finding(
+                    "cutover.partitioned",
+                    Severity.ERROR,
+                    "Partitioned tables aren't supported yet",
+                    "Cutover's final check needs a concurrent index, which PostgreSQL can't "
+                    "build on a partitioned table.",
+                )
+            )
+        if row_security:
+            findings.append(
+                Finding(
+                    "cutover.row_security",
+                    Severity.ERROR,
+                    "Row-level security hides rows from this role",
+                    "Cutover couldn't confirm that every row has a new vector.",
+                    hint="Connect as a role with BYPASSRLS, or turn off FORCE ROW LEVEL "
+                    "SECURITY for the migration.",
+                )
+            )
+
         pending = self.writer.pending_count()
         if pending:
             findings.append(
@@ -354,27 +383,47 @@ class PgSwitch:
                 pause(delay)
                 delay = min(delay * 2, 30)
 
-    def cutover(self, allow_missing: int = 0) -> None:
+    def cutover(
+        self,
+        allow_missing: int = 0,
+        fill: Callable[[list[Row]], list[tuple[Row, list[float]]]] | None = None,
+        exclude: Sequence[str] = (),
+    ) -> int:
         """Switch in one transaction, after a final check that every row has a new vector.
 
         Writes wait while the check runs (it uses the index from :meth:`prepare`); reads
-        continue until the renames, which take milliseconds. Raises :class:`StillPending`
-        if rows arrived since the last catch-up, leaving everything unchanged.
+        continue until the renames, which take milliseconds. On a busy table a few rows
+        always arrive after the last catch-up: up to ``MAX_FILL`` of them are embedded with
+        ``fill`` while writes wait, so cutover doesn't chase them forever. ``exclude`` lists
+        rows the provider rejected, which aren't sent again. Raises :class:`StillPending`
+        if more rows are missing, leaving everything unchanged. Returns rows filled.
         """
         lay = self.layout
         writer = self.writer
+        filled = 0
 
-        def run() -> None:
-            self.conn.execute(
-                sql.SQL("LOCK TABLE {} IN SHARE ROW EXCLUSIVE MODE").format(lay.qualified)
-            )
-            missing = self.conn.execute(
+        def missing_count() -> int:
+            row = self.conn.execute(
                 sql.SQL("SELECT count(*) FROM {table} WHERE {pending}").format(
                     table=lay.qualified, pending=writer._pending_filter()
                 )
             ).fetchone()
-            if missing and int(missing[0]) > allow_missing:
-                raise StillPending(int(missing[0]))
+            return int(row[0]) if row else 0
+
+        def run() -> None:
+            nonlocal filled
+            filled = 0
+            self.conn.execute(
+                sql.SQL("LOCK TABLE {} IN SHARE ROW EXCLUSIVE MODE").format(lay.qualified)
+            )
+            missing = missing_count()
+            if missing > allow_missing and fill is not None:
+                rows = writer.fetch(None, MAX_FILL + 1, exclude)
+                if 0 < len(rows) <= MAX_FILL:
+                    filled = writer.write(fill(rows))
+                    missing = missing_count()
+            if missing > allow_missing:
+                raise StillPending(missing)
             statements = [
                 *writer.drop_sync_sql(lay.target),
                 *self._index_renames(
@@ -389,6 +438,7 @@ class PgSwitch:
                 self.conn.execute(statement)
 
         self._transaction(run, "cut over")
+        return filled
 
     def rollback(self) -> int:
         """Rename the columns back. Returns rows that have no old-model vector."""
