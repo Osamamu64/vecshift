@@ -52,6 +52,11 @@ def check_access(p: IndexProfile) -> list[Finding]:
     ]
 
 
+def _place(p: IndexProfile) -> str:
+    """Where a value lives in this store: a column, or a payload field."""
+    return "payload field" if p.store == "qdrant" else "column"
+
+
 def check_text(p: IndexProfile) -> list[Finding]:
     if p.text_field is None:
         return [
@@ -59,11 +64,11 @@ def check_text(p: IndexProfile) -> list[Finding]:
                 "text.missing",
                 Severity.ERROR,
                 "No source text: this index can't be re-embedded from itself",
-                "No text column was found next to the vectors. Re-embedding with a new model "
-                "needs the original text.",
-                hint="If the text is in a column with an unusual name, pass --text-column. If "
-                "it lives elsewhere (another table, object storage), keep that source "
-                "available for the migration.",
+                f"No text {_place(p)} was found next to the vectors. Re-embedding with a new "
+                "model needs the original text.",
+                hint=f"If the text is in a {_place(p)} with an unusual name, pass "
+                "--text-column. If it lives elsewhere (another table, object storage), keep "
+                "that source available for the migration.",
             )
         ]
     rows = p.sample.rows
@@ -268,7 +273,12 @@ def check_models(p: IndexProfile) -> list[Finding]:
                 "Nothing next to the vectors says which embedding model produced them, so "
                 "a mixed or outdated index can't be detected directly.",
                 hint="Store a model tag with each row, for example the output of "
-                "`vecshift fingerprint`, in a column or in metadata under `model_tag`.",
+                "`vecshift fingerprint`, "
+                + (
+                    "in the payload under `model_tag`."
+                    if p.store == "qdrant"
+                    else "in a column or in metadata under `model_tag`."
+                ),
             )
         ]
     findings: list[Finding] = []
@@ -329,8 +339,12 @@ def check_indexes(p: IndexProfile) -> list[Finding]:
                 if large
                 else "That's fine for small tables but slows down as the table grows."
             ),
-            hint="Create an HNSW index with the operator class for your distance, for "
-            "example `vector_cosine_ops`.",
+            hint=(
+                "Turn HNSW back on: set the collection's hnsw_config.m above 0."
+                if p.store == "qdrant"
+                else "Create an HNSW index with the operator class for your distance, for "
+                "example `vector_cosine_ops`."
+            ),
         )
     ]
 
@@ -387,13 +401,44 @@ def check_sync(p: IndexProfile) -> list[Finding]:
                 "sync.none",
                 Severity.WARNING,
                 "No way to track writes during a migration",
-                "There's no logical replication and no updated-at timestamp column, so "
-                "changes made while a migration runs would be missed.",
-                hint="Add an `updated_at` column maintained by a trigger, or plan to pause "
-                "writes or dual-write during the migration.",
+                "Nothing records when a row changes (no change stream and no updated-at "
+                "field), so changes made while a migration runs would be missed.",
+                hint="Add an `updated_at` field set on every write, or plan to pause writes "
+                "or dual-write during the migration.",
             )
         )
     return findings
+
+
+def check_alias(p: IndexProfile) -> list[Finding]:
+    """Stores that cut over by moving an alias: is the application already using one?"""
+    if p.aliases is None:
+        return []
+    collection = p.target.split(":")[0]
+    if p.aliases:
+        names = ", ".join(f"`{a}`" for a in p.aliases)
+        return [
+            Finding(
+                "alias.present",
+                Severity.OK,
+                "Searches can switch in one step",
+                f"{names} points at `{collection}`. If your application queries through it, "
+                "a migration builds a new collection and moves the alias there, and "
+                "rollback moves it back.",
+            )
+        ]
+    return [
+        Finding(
+            "alias.none",
+            Severity.WARNING,
+            "Cutover needs a one-time application change",
+            f"No alias points at `{collection}`, so your application must query it by name. "
+            "A migration builds a new collection and switches searches by moving an alias, "
+            "and Qdrant can't give an alias the name of an existing collection.",
+            hint=f"Create an alias, such as `{collection}_live`, and point your application "
+            "at it once. After that, every migration is just a model switch.",
+        )
+    ]
 
 
 CHECKS: tuple[Check, ...] = (
@@ -406,6 +451,7 @@ CHECKS: tuple[Check, ...] = (
     check_models,
     check_indexes,
     check_sync,
+    check_alias,
 )
 
 SAMPLE_CHECKS = {
@@ -492,7 +538,8 @@ def run_checks(profile: IndexProfile) -> Report:
                 "sample.empty",
                 Severity.INFO,
                 "No rows to inspect",
-                "The table is empty (or no rows are visible), so only schema checks ran.",
+                f"The {'collection' if profile.store == 'qdrant' else 'table'} is empty (or "
+                "no rows are visible), so only schema checks ran.",
             )
         )
     for check in CHECKS:

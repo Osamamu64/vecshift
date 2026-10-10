@@ -40,6 +40,10 @@ and how it protects credentials. To report a vulnerability, see
   - Credentials inside URLs (`https://user:pass@...`) are rejected, and URL query strings
     are hidden wherever a spec is displayed.
 - Error messages from providers are shortened and never include the request's key.
+- **Qdrant API keys** come only from `QDRANT_API_KEY`. They're sent only over `https://`
+  (or plain `http://` to this machine), redirects are never followed, credentials in the
+  Qdrant URL are rejected, and no message includes the key. `doctor` reads a sample of
+  vectors from Qdrant to summarise them in memory, and keeps nothing about single points.
 - **`.env` files** are an optional alternative to exporting variables. They're read from
   the current folder (or `--env-file`), never override variables already set, and
   vecshift warns when other users can read one. `vecshift init` types secrets hidden, and

@@ -7,6 +7,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Qdrant support for `doctor` and `bench`, over the REST API (`--qdrant URL` or
+  `VECSHIFT_QDRANT_URL`, with the API key from `QDRANT_API_KEY`). `doctor` runs the same
+  checks as for pgvector on a collection or alias, and reports whether searches go through
+  an alias (`alias.present`), or need a one-time change to one before a migration can
+  switch them (`alias.none`). `bench` samples documents from a collection's payloads.
+  See `docs/connectors/qdrant.md`.
+
 ### Changed
 
 - `doctor` no longer warns "No way to track writes during a migration" for pgvector

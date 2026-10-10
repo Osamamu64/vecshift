@@ -222,7 +222,26 @@ def bench(
     column: Annotated[
         str | None, typer.Option(help="Vector column, if the table has several.")
     ] = None,
-    text_column: Annotated[str | None, typer.Option(help="Column holding the text.")] = None,
+    qdrant_url: Annotated[
+        str | None,
+        typer.Option(
+            "--qdrant",
+            envvar="VECSHIFT_QDRANT_URL",
+            help="Sample documents from Qdrant at this URL instead. The API key is read from "
+            "QDRANT_API_KEY.",
+            show_default=False,
+        ),
+    ] = None,
+    collection: Annotated[
+        str | None, typer.Option(help="Qdrant collection or alias to sample.")
+    ] = None,
+    vector: Annotated[
+        str | None, typer.Option(help="Qdrant named vector, if the collection has several.")
+    ] = None,
+    text_column: Annotated[
+        str | None,
+        typer.Option(help="Column (or Qdrant payload field) holding the text."),
+    ] = None,
     sample_size: Annotated[
         int, typer.Option("--sample", min=10, max=100_000, help="Documents to sample.")
     ] = 1000,
@@ -292,12 +311,17 @@ def bench(
                 corpus_mod.load_documents(docs), sample_size, wanted, seed
             )
             source = docs.name
+        elif qdrant_url and (collection or vector or _explicit(ctx, "qdrant_url") or not dsn):
+            documents, source = _from_qdrant(
+                qdrant_url, collection, vector, text_column, sample_size, wanted
+            )
         elif dsn:
             documents, source = _from_database(dsn, table, column, text_column, sample_size, wanted)
         else:
             raise _fail(
                 "No documents to benchmark.",
-                "Pass --docs FILE, or a database with --dsn (or VECSHIFT_DSN) and --table.",
+                "Pass --docs FILE, a database with --dsn (or VECSHIFT_DSN) and --table, or "
+                "Qdrant with --qdrant URL and --collection.",
             )
     except CorpusError as exc:
         raise _fail(str(exc)) from exc
@@ -373,6 +397,33 @@ async def _generate(spec: ModelSpec, documents: list, n: int, seed: int) -> list
         raise _fail(str(exc)) from exc
     finally:
         await generator.aclose()
+
+
+def _explicit(ctx: typer.Context, name: str) -> bool:
+    source = ctx.get_parameter_source(name)
+    return source is not None and source.name == "COMMANDLINE"
+
+
+def _from_qdrant(
+    url: str,
+    collection: str | None,
+    vector: str | None,
+    text_field: str | None,
+    size: int,
+    wanted: set[str],
+) -> tuple[list, str]:  # type: ignore[type-arg]
+    from vecshift.bench import Document
+    from vecshift.bench.corpus import clip
+    from vecshift.connectors import qdrant
+    from vecshift.connectors.qdrant.documents import sample_documents
+
+    try:
+        settings = qdrant.prepare(url)
+        with qdrant.QdrantClient(settings) as client:
+            rows, name = sample_documents(client, collection, vector, text_field, size, wanted)
+    except qdrant.QdrantError as exc:
+        raise _fail(str(exc), exc.hint) from exc
+    return [Document(i, clip(t)) for i, t in rows], name
 
 
 def _from_database(

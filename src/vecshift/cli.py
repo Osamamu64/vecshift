@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from enum import StrEnum
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any, NoReturn
 
 import typer
 
@@ -179,22 +180,42 @@ def _render(report: Report, connection: str) -> None:
 def doctor(
     ctx: typer.Context,
     dsn: Annotated[
-        str,
+        str | None,
         typer.Option(
             envvar=["VECSHIFT_DSN", "DATABASE_URL"],
             help="PostgreSQL connection string. Prefer the VECSHIFT_DSN environment variable "
             "so the password stays out of your shell history.",
             show_default=False,
         ),
-    ],
+    ] = None,
     table: Annotated[
         str | None, typer.Option(help="Table to inspect, as table or schema.table.")
     ] = None,
     column: Annotated[
         str | None, typer.Option(help="Vector column, if there's more than one.")
     ] = None,
+    qdrant_url: Annotated[
+        str | None,
+        typer.Option(
+            "--qdrant",
+            envvar="VECSHIFT_QDRANT_URL",
+            help="Inspect Qdrant at this URL instead, e.g. http://localhost:6333. The API key "
+            "is read from QDRANT_API_KEY.",
+            show_default=False,
+        ),
+    ] = None,
+    collection: Annotated[
+        str | None, typer.Option(help="Qdrant collection or alias to inspect.")
+    ] = None,
+    vector: Annotated[
+        str | None, typer.Option(help="Qdrant named vector, if the collection has several.")
+    ] = None,
     text_column: Annotated[
-        str | None, typer.Option(help="Column holding the source text, if not detected.")
+        str | None,
+        typer.Option(
+            help="Column (or Qdrant payload field, such as metadata.text) holding the source "
+            "text, if not detected."
+        ),
     ] = None,
     sample_size: Annotated[
         int, typer.Option(min=1, max=100_000, help="Maximum rows to inspect.")
@@ -214,49 +235,23 @@ def doctor(
         FailOn, typer.Option(help="Exit with status 1 if any finding is this severe or worse.")
     ] = FailOn.NEVER,
 ) -> None:
-    """Inspect a pgvector index and report problems. Read-only."""
+    """Inspect a pgvector or Qdrant index and report problems. Read-only."""
     warn_if_password_on_command_line(ctx, dsn)
-    try:
-        from vecshift.connectors import pgvector
-    except ImportError as exc:  # pragma: no cover - a broken install
-        typer.secho(
-            "The PostgreSQL driver is missing. Reinstall: pip install --force-reinstall vecshift",
-            err=True,
-            fg=typer.colors.RED,
+    source = ctx.get_parameter_source("qdrant_url")
+    explicit_qdrant = source is not None and source.name == "COMMANDLINE"
+    if collection or vector or explicit_qdrant or (qdrant_url and not dsn):
+        if not qdrant_url:
+            _doctor_fail("Missing option '--qdrant' (or VECSHIFT_QDRANT_URL).")
+        profile, display, kind = _qdrant_profile(
+            str(qdrant_url), collection, vector, text_column, sample_size, timeout
         )
-        raise typer.Exit(2) from exc
-
-    try:
-        settings = pgvector.prepare(dsn)
-        conn = pgvector.connect(settings, statement_timeout_s=timeout)
-    except pgvector.ConnectError as exc:
-        typer.secho(f"Couldn't connect: {exc}", err=True, fg=typer.colors.RED)
-        if exc.hint:
-            typer.echo(f"→ {exc.hint}", err=True)
-        raise typer.Exit(2) from exc
-
-    try:
-        profile = pgvector.inspect(
-            conn, table=table, column=column, text_column=text_column, sample_size=sample_size
+    elif dsn:
+        profile, display, kind = _pg_profile(dsn, table, column, text_column, sample_size, timeout)
+    else:
+        _doctor_fail(
+            "Missing option '--dsn' (or VECSHIFT_DSN).",
+            "Pass a PostgreSQL connection string, or --qdrant URL for Qdrant.",
         )
-    except pgvector.TargetSelectionError as exc:
-        typer.secho(str(exc), err=True, fg=typer.colors.RED)
-        if exc.candidates:
-            typer.echo("Vector columns found:", err=True)
-            for c in exc.candidates:
-                dims = f"({c.dimensions})" if c.dimensions else ""
-                typer.echo(f"  {c.qualified}  {c.type}{dims}", err=True)
-        raise typer.Exit(2) from exc
-    except Exception as exc:
-        import psycopg
-
-        if isinstance(exc, psycopg.Error):
-            typer.secho(f"Inspection failed: {exc}", err=True, fg=typer.colors.RED)
-            raise typer.Exit(2) from exc
-        raise
-    finally:
-        conn.rollback()
-        conn.close()
 
     report = run_checks(profile)
     if html is not None:
@@ -264,8 +259,8 @@ def doctor(
 
         page = render_html(
             report,
-            connection=settings.display,
-            connection_kind=settings.description,
+            connection=display,
+            connection_kind=kind,
             version=__version__,
         )
         try:
@@ -275,14 +270,95 @@ def doctor(
             raise typer.Exit(2) from exc
 
     if output_json:
-        typer.echo(json.dumps({"connection": settings.display, **report.to_dict()}, indent=2))
+        typer.echo(json.dumps({"connection": display, **report.to_dict()}, indent=2))
     else:
-        _render(report, settings.description)
+        _render(report, kind)
     if html is not None:
         typer.echo(f"HTML report written to {html}", err=output_json)
 
     if fail_on is not FailOn.NEVER and report.worst.rank >= Severity(fail_on.value).rank:
         raise typer.Exit(1)
+
+
+def _doctor_fail(message: str, hint: str | None = None) -> NoReturn:
+    typer.secho(message, err=True, fg=typer.colors.RED)
+    if hint:
+        typer.echo(f"→ {hint}", err=True)
+    raise typer.Exit(2)
+
+
+def _candidates(candidates: Sequence[Any], heading: str) -> None:
+    if candidates:
+        typer.echo(heading, err=True)
+        for c in candidates:
+            dims = f"({c.dimensions})" if c.dimensions else ""
+            typer.echo(f"  {c.qualified}  {c.type}{dims}", err=True)
+
+
+def _pg_profile(
+    dsn: str,
+    table: str | None,
+    column: str | None,
+    text_column: str | None,
+    sample_size: int,
+    timeout: int,
+) -> tuple[Any, str, str]:
+    """Profile a pgvector column: (profile, connection shown, connection kind)."""
+    try:
+        from vecshift.connectors import pgvector
+    except ImportError:  # pragma: no cover - a broken install
+        _doctor_fail(
+            "The PostgreSQL driver is missing. Reinstall: pip install --force-reinstall vecshift"
+        )
+
+    try:
+        settings = pgvector.prepare(dsn)
+        conn = pgvector.connect(settings, statement_timeout_s=timeout)
+    except pgvector.ConnectError as exc:
+        _doctor_fail(f"Couldn't connect: {exc}", exc.hint)
+
+    try:
+        profile = pgvector.inspect(
+            conn, table=table, column=column, text_column=text_column, sample_size=sample_size
+        )
+    except pgvector.TargetSelectionError as exc:
+        typer.secho(str(exc), err=True, fg=typer.colors.RED)
+        _candidates(exc.candidates or [], "Vector columns found:")
+        raise typer.Exit(2) from exc
+    except Exception as exc:
+        import psycopg
+
+        if isinstance(exc, psycopg.Error):
+            _doctor_fail(f"Inspection failed: {exc}")
+        raise
+    finally:
+        conn.rollback()
+        conn.close()
+    return profile, settings.display, settings.description
+
+
+def _qdrant_profile(
+    url: str,
+    collection: str | None,
+    vector: str | None,
+    text_field: str | None,
+    sample_size: int,
+    timeout: int,
+) -> tuple[Any, str, str]:
+    """Profile a Qdrant vector: (profile, URL shown, connection kind)."""
+    from vecshift.connectors import qdrant
+
+    try:
+        settings = qdrant.prepare(url)
+        with qdrant.QdrantClient(settings, timeout=float(timeout)) as client:
+            profile = qdrant.inspect(client, collection, vector, text_field, sample_size)
+    except qdrant.SelectionError as exc:
+        typer.secho(str(exc), err=True, fg=typer.colors.RED)
+        _candidates(exc.candidates, "Vectors found:")
+        raise typer.Exit(2) from exc
+    except qdrant.QdrantError as exc:
+        _doctor_fail(str(exc), exc.hint)
+    return profile, settings.display, settings.description
 
 
 from vecshift.cli_bench import bench  # noqa: E402
