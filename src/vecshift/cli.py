@@ -230,3 +230,7 @@ app.command()(apply)
 app.command()(cutover)
 app.command()(rollback)
 app.command()(cleanup)
+
+from vecshift.cli_eval import eval_  # noqa: E402
+
+app.command(name="eval")(eval_)

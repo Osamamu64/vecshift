@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import random
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 import httpx
 
@@ -48,12 +48,17 @@ class QueryGenerator:
         if self._owns_client:
             await self._client.aclose()
 
-    async def _one(self, doc: Document) -> Query | None:
+    async def _one(self, doc: Document, language: str | None = None) -> Query | None:
+        prompt = PROMPT.format(text=doc.text[:4000])
+        if language:
+            prompt = prompt.replace(
+                "Reply with the query only", f"Write the query in {language}. Reply with it only"
+            )
         payload = {
             "model": self.spec.model,
             "temperature": 0,
             "max_tokens": 64,
-            "messages": [{"role": "user", "content": PROMPT.format(text=doc.text[:4000])}],
+            "messages": [{"role": "user", "content": prompt}],
         }
         delay = 1.0
         async with self._limit:
@@ -82,7 +87,20 @@ class QueryGenerator:
                 return Query(line, frozenset({doc.id})) if line else None
         return None  # pragma: no cover
 
-    async def generate(self, docs: Sequence[Document], n: int, seed: int) -> list[Query]:
+    async def generate(
+        self,
+        docs: Sequence[Document],
+        n: int,
+        seed: int,
+        language: Callable[[Document], str | None] | None = None,
+    ) -> list[Query]:
+        """One query for each of ``n`` sampled documents.
+
+        ``language`` picks the language to write each query in, for cross-language tests
+        such as an Arabic question about an English passage.
+        """
         chosen = random.Random(seed).sample(list(docs), min(n, len(docs)))
-        results = await asyncio.gather(*(self._one(d) for d in chosen))
+        results = await asyncio.gather(
+            *(self._one(d, language(d) if language else None) for d in chosen)
+        )
         return [q for q in results if q is not None]

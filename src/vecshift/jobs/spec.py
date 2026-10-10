@@ -44,6 +44,8 @@ class Source(_Strict):
     """``table`` or ``schema.table``."""
     vector_column: str | None = None
     text_column: str | None = None
+    model: str | None = None
+    """The model that made the current vectors, so ``eval`` can embed queries for them."""
 
     @field_validator("table")
     @classmethod
@@ -58,6 +60,16 @@ class Source(_Strict):
     @classmethod
     def _columns(cls, value: str | None) -> str | None:
         return _identifier(value, "column")
+
+    @field_validator("model")
+    @classmethod
+    def _old_model(cls, value: str | None) -> str | None:
+        if value is not None:
+            try:
+                parse_spec(value)
+            except SpecError as exc:
+                raise ValueError(str(exc)) from None
+        return value
 
 
 class VectorType(StrEnum):
@@ -172,6 +184,7 @@ source:
   table: {json.dumps(table)}
   # vector_column: embedding     # needed only if the table has several
   # text_column: content         # detected automatically when it's a common name
+  # model: openai/text-embedding-3-small  # the model that made the current vectors, for eval
 
 target:
   # New vectors go in this column next to the old ones. Cutover renames the two columns

@@ -56,8 +56,13 @@ Read-only tools. No writes to your stores, no production risk.
   - [ ] adaptive rate limiting that backs off on rising latency, not only on 429s
 - [x] `vecshift cutover`, `rollback`, and `cleanup` for pgvector and Supabase: the new
   vectors take the column name the application already uses, in one transaction
-- `vecshift eval`: compare old and new vectors on overlap and recall@k, with a go/no-go
-  report, including on a partial (`--until`) migration
+- [x] `vecshift eval`: compare old and new vectors on your data, with a go/no-go verdict
+  - [x] recall@k per language pair (Arabic and Latin scripts), with cross-language queries
+  - [x] latency vs accuracy: query embedding and search percentiles across index settings
+  - [x] works without the old model, from stored vectors and document grouping
+  - [x] works on a partial (`--until`) migration
+  - [x] an HTML report with the latency vs accuracy chart
+  - [ ] an LLM judge for results the two sides disagree on
 - Docker image and a docker-compose demo
 
 ### Two kinds of migration
