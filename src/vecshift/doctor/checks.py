@@ -369,6 +369,18 @@ def check_sync(p: IndexProfile) -> list[Finding]:
                 "pass by ID.",
             )
         )
+    elif p.store == "pgvector" and p.has_primary_key:
+        findings.append(
+            Finding(
+                "sync.trigger",
+                Severity.OK,
+                "vecshift keeps up with writes",
+                "There's no logical replication or updated-at column, and none is needed: "
+                "`vecshift apply` adds a trigger that clears a row's new vector when its text "
+                "changes, so rows edited during a migration are re-embedded before cutover. "
+                "Inserts are picked up the same way, and deleted rows simply drop out.",
+            )
+        )
     else:
         findings.append(
             Finding(

@@ -139,7 +139,13 @@ def test_missing_index_severity_grows_with_size(rows: int, severity: Severity) -
 def test_sync_strategies() -> None:
     assert "sync.logical_replication" in ids(make_profile(logical_replication=True))
     assert "sync.updated_at" in ids(make_profile())
-    assert ids(make_profile(updated_at_field=None))["sync.none"] is Severity.WARNING
+    other = ids(make_profile(store="qdrant", updated_at_field=None))
+    assert other["sync.none"] is Severity.WARNING, "stores vecshift has no trigger for"
+    # pgvector needs neither: vecshift's own trigger tracks edits during apply.
+    pg = ids(make_profile(store="pgvector", updated_at_field=None))
+    assert pg["sync.trigger"] is Severity.OK and "sync.none" not in pg
+    no_key = ids(make_profile(store="pgvector", updated_at_field=None, has_primary_key=False))
+    assert "sync.none" in no_key and "sync.trigger" not in no_key
     found = ids(make_profile(has_primary_key=False, logical_replication=True))
     assert found["sync.no_primary_key"] is Severity.ERROR
     assert "sync.logical_replication" not in found

@@ -130,7 +130,6 @@ errors, so it can gate a CI job.
 | Vector size unknown (add `dims=` or use `--probe`) | warning |
 | The table already uses the target model | warning |
 | The HNSW build needs more memory than `maintenance_work_mem` | warning |
-| No way to track writes made during the migration (from `doctor`) | warning |
 | No budget set, or no price for the model | info |
 
 ## Estimates

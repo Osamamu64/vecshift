@@ -19,6 +19,8 @@
 > `bench`, `plan`, `apply`, `eval`, and `cutover`. Watch the repo or read the
 > [roadmap](docs/roadmap.md) to follow along.
 
+![vecshift init finding the vector column and choosing a model, apply re-embedding 16,000 rows with a progress bar, and status showing the migration ready to cut over](docs/images/demo.gif)
+
 ---
 
 ## Why
@@ -116,8 +118,9 @@ Rows    ~1,001 (inspected 1,001, full table)
 ✖ ERROR    Vectors from more than one model
            `metadata->>'model'` records 2 different models: text-embedding-ada-002
            (900), text-embedding-3-small (100). ...
-⚠ WARNING  No way to track writes during a migration
-           There's no logical replication and no updated-at timestamp column, ...
+✔ OK       vecshift keeps up with writes
+           `vecshift apply` adds a trigger that clears a row's new vector when its
+           text changes, so rows edited during a migration are re-embedded. ...
 ✔ OK       Source text available
            Every sampled row has text in `content`, so the index can be re-embedded.
 ```
