@@ -8,6 +8,9 @@
 **Safe, observable embedding migrations for any vector store, with any embedding model.**
 
 [![CI](https://github.com/Osamamu64/vecshift/actions/workflows/ci.yml/badge.svg)](https://github.com/Osamamu64/vecshift/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/vecshift)](https://pypi.org/project/vecshift/)
+[![Python](https://img.shields.io/pypi/pyversions/vecshift)](https://pypi.org/project/vecshift/)
+[![Docker image](https://img.shields.io/badge/docker-ghcr.io%2Fosamamu64%2Fvecshift-2496ED?logo=docker&logoColor=white)](https://github.com/Osamamu64/vecshift/pkgs/container/vecshift)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 ![Status: alpha](https://img.shields.io/badge/status-alpha-orange)
 
