@@ -7,6 +7,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- `doctor` no longer warns "No way to track writes during a migration" for pgvector
+  tables with a primary key: `vecshift apply` tracks edits with its own trigger. It
+  reports `sync.trigger` (OK) instead. Other stores, and tables without a primary key,
+  still get `sync.none`.
+- `apply` leaves a blank line between its summary and its progress at a colour terminal.
+
 ## [0.3.0] - 2026-10-10
 
 ### Changed

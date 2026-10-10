@@ -13,7 +13,7 @@ Dates aren't promised. Each phase ships when it works.
 - [x] Capability flags and plugin contracts
 - [x] `vecshift fingerprint`
 - [ ] Plugin loading through entry points
-- [ ] Mock embedding provider and local store for a free first run
+- [x] A free first run: the built-in hashing model and an offline Docker demo
 
 ## Phase 1: Know your index ✅ in progress
 
@@ -43,7 +43,9 @@ Read-only tools. No writes to your stores, no production risk.
 
 ## Phase 2: Migrate safely
 
-- [x] `vecshift init` and the `vecshift.yaml` job file
+- [x] `vecshift init` and the `vecshift.yaml` job file, with a guided setup at a terminal
+  that finds the vector columns, offers models, and can save secrets to a private `.env`
+- [x] `vecshift status`: where a migration stands and the command to run next
 - [x] `vecshift plan`: validate the job against the database and estimate tokens, cost, time,
   and storage, with an optional `--probe` of the real model
 - [x] `vecshift apply` for pgvector and Supabase: re-embed into a side-by-side column
@@ -65,6 +67,8 @@ Read-only tools. No writes to your stores, no production risk.
   - [x] an HTML report with the latency vs accuracy chart
   - [ ] an LLM judge for results the two sides disagree on
 - [x] PyPI package, Docker image, and an offline docker compose demo
+- [x] A terminal design for every command: arrow-key prompts, progress bars, tables, and
+  plain output for scripts and CI
 
 ### Two kinds of migration
 

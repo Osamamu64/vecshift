@@ -335,7 +335,6 @@ def apply(
         ui.note(f"  This changes {plan.source.split()[0]} and sends row text to {where}.")
         if not ui.confirm("Apply?", default=False):
             raise typer.Exit(1)
-        ui.console.print()
     elif not yes:
         where = "your machine" if spec.is_local else spec.url
         typer.echo(
@@ -374,6 +373,7 @@ def apply(
             typer.echo(json.dumps({"event": event.kind, **event.data}))
 
     elif fancy:
+        ui.console.print()
         on_event = _FancyProgress()
     else:
         on_event = _Progress(live=sys.stdout.isatty())

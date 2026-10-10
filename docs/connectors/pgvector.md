@@ -51,6 +51,10 @@ automatically:
 
 That covers the default layouts of Supabase's vector guides, LangChain, and LlamaIndex.
 
+A change-tracking column isn't required for a migration: `vecshift apply` adds its own
+trigger, which clears a row's new vector whenever its text changes, so rows edited during
+the run are re-embedded before cutover.
+
 ## Safety
 
 `doctor` is safe to run against production:

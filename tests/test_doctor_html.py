@@ -40,7 +40,7 @@ def test_is_a_complete_self_contained_document() -> None:
     ("overrides", "title"),
     [
         ({}, "Ready to migrate"),
-        ({"updated_at_field": None}, "Ready to migrate, with caveats"),
+        ({"store": "qdrant", "updated_at_field": None}, "Ready to migrate, with caveats"),
         ({"text_field": None, "texts_present": None}, "Not ready to migrate"),
         (
             {
