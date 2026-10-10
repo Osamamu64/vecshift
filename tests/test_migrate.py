@@ -1,6 +1,7 @@
 """The apply loop and its state file, with an in-memory table and a fake model."""
 
 import asyncio
+import itertools
 import json
 import os
 import stat
@@ -271,3 +272,33 @@ def test_until_stops_at_a_share_of_rows(state: JobState) -> None:
     assert result.status == "stopped" and result.rows_written == 0, "already at 50%"
     result, _ = run(table, model, state)
     assert result.status == "complete" and result.rows_written == 50
+
+
+def test_busy_table_still_finishes(state: JobState) -> None:
+    """Rows that change on every pass don't stop apply from indexing and finishing."""
+    table = FakeTable(300)
+    counter = iter(range(10_000))
+
+    def app_keeps_writing(rows: list[FakeRow]) -> None:
+        key = 1 + next(counter) % 300
+        table.edit(key, f"edited again {key} {next(counter)}")
+
+    table.on_fetch = app_keeps_writing
+    result, _ = run(table, FakeModel(), state)
+    assert result.status == "complete" and result.index == "built"
+    assert 0 < result.remaining <= 100
+    assert "changed in the last moments" in (result.message or "")
+
+
+def test_writes_faster_than_embedding_stop(state: JobState) -> None:
+    table = FakeTable(300)
+    counter = itertools.count()
+
+    def flood(rows: list[FakeRow]) -> None:
+        for _ in range(15):  # 15 new rows for every 10 embedded
+            table.rows[1_000 + next(counter)] = ["brand new row", None]
+
+    table.on_fetch = flood
+    result, _ = run(table, FakeModel(), state)
+    assert result.status == "stopped" and table.index is None
+    assert "faster than they could be embedded" in (result.message or "")

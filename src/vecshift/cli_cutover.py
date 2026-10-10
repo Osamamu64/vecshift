@@ -133,6 +133,33 @@ def _catch_up(found: _Located, switch: PgSwitch) -> int:
     return result.rows_written
 
 
+def _filler(found: _Located) -> Any:
+    """Embeds the few rows that arrive between the last catch-up and the switch."""
+    from vecshift.embeddings import EmbeddingError, create_embedder
+    from vecshift.migrate.engine import MAX_CHARS
+
+    spec, state, dims = found.spec, found.state, found.layout.dims
+
+    def fill(rows: list[Any]) -> list[tuple[Any, list[float]]]:
+        async def embed() -> tuple[list[list[float]], int]:
+            embedder = create_embedder(spec)
+            try:
+                vectors = await embedder.embed([r.text[:MAX_CHARS] for r in rows], "document")
+                return vectors, embedder.tokens
+            finally:
+                await embedder.aclose()
+
+        vectors, tokens = asyncio.run(embed())
+        if any(len(v) != dims for v in vectors):
+            raise EmbeddingError(f"{spec.name} returned vectors of the wrong size.")
+        state.tokens += tokens
+        if spec.price is not None:
+            state.spent_usd += tokens * spec.price / 1_000_000
+        return list(zip(rows, vectors, strict=True))
+
+    return fill
+
+
 def _show(findings: list[Finding], output_json: bool) -> None:
     if not output_json:
         finding_lines(findings)
@@ -213,7 +240,9 @@ def cutover(
             try:
                 for attempt in range(1, CATCH_UP_TRIES + 1):
                     try:
-                        switch.cutover(allow_missing=allowed)
+                        caught_up += switch.cutover(
+                            allowed, fill=_filler(found), exclude=tuple(state.failed)
+                        )
                         break
                     except StillPending as exc:
                         if attempt == CATCH_UP_TRIES:

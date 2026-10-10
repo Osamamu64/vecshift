@@ -464,3 +464,37 @@ def test_cutover_refuses_partitioned_tables(
     result = run("cutover", apply_job(tmp_path, model_url), db_dsn, "--check", "--json")
     assert result.exit_code == 1, result.output
     assert "cutover.partitioned" in {f["id"] for f in json.loads(result.stdout)["findings"]}
+
+
+def test_late_rows_are_embedded_under_the_lock(
+    db_dsn: str, setup: psycopg.Connection, applied: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On a busy table, rows always arrive after the last catch-up; cutover still converges."""
+    import vecshift.cli_cutover as cli_cutover
+    from vecshift.connectors.pgvector import switch as switch_module
+
+    real_prepare = switch_module.PgSwitch.prepare
+    catch_ups = 0
+    real_catch_up = cli_cutover._catch_up
+
+    def prepare_then_insert(self: PgSwitch) -> None:
+        real_prepare(self)
+        setup.execute(
+            "INSERT INTO public.documents (content, metadata) "
+            "SELECT 'late ' || g, '{}' FROM generate_series(1, 3) g"
+        )
+
+    def counting(*args: Any) -> int:
+        nonlocal catch_ups
+        catch_ups += 1
+        return real_catch_up(*args)
+
+    monkeypatch.setattr(switch_module.PgSwitch, "prepare", prepare_then_insert)
+    monkeypatch.setattr(cli_cutover, "_catch_up", counting)
+    result = run("cutover", applied, db_dsn, "--yes", "--json")
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)["caught_up"] == 3
+    assert catch_ups == 0, "filled in the switch, without another catch-up round"
+    assert mismatched(setup, "embedding") == 0
+    state = json.loads((applied.parent / ".vecshift" / "documents-reembed.state.json").read_text())
+    assert state["tokens"] > 0
