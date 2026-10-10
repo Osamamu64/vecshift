@@ -1,4 +1,4 @@
-"""The ``vecshift init`` and ``vecshift plan`` commands."""
+"""The ``vecshift plan`` command, and loading a job for the commands that use one."""
 
 from __future__ import annotations
 
@@ -34,39 +34,6 @@ def _fail(message: str, hint: str | None = None) -> typer.Exit:
     if hint:
         typer.echo(f"→ {hint}", err=True)
     return typer.Exit(2)
-
-
-def init(
-    table: Annotated[
-        str, typer.Option(help="Table holding the vectors, as table or schema.table.")
-    ],
-    model: Annotated[
-        str, typer.Option(help="The new model, e.g. openai/text-embedding-3-large,dims=1024.")
-    ],
-    column: Annotated[str, typer.Option(help="Column for the new vectors.")] = "embedding_v2",
-    output: Annotated[Path, typer.Option("--output", "-o", help="Where to write the job.")] = (
-        DEFAULT_JOB
-    ),
-    force: Annotated[bool, typer.Option(help="Overwrite an existing file.")] = False,
-) -> None:
-    """Write a job file to start a migration from."""
-    import yaml
-    from pydantic import ValidationError
-
-    from vecshift.jobs.spec import JobSpec, format_errors, template
-
-    text = template(table, model, column)
-    try:
-        JobSpec.model_validate(yaml.safe_load(text))
-    except ValidationError as exc:
-        raise _fail(f"Those settings aren't valid:\n{format_errors(exc)}") from exc
-    if output.exists() and not force:
-        raise _fail(f"{output} already exists.", "Pass --force to overwrite it.")
-    try:
-        output.write_text(text, encoding="utf-8")
-    except OSError as exc:
-        raise _fail(f"Couldn't write {output}: {exc.strerror}") from exc
-    typer.echo(f"Wrote {output}. Review it, then run: vecshift plan {output}")
 
 
 def _size(n: int | None) -> str:
@@ -232,7 +199,8 @@ def load(
     if not dsn:
         raise _fail(
             f"{variable} isn't set.",
-            f"Export the database connection string as {variable}.",
+            f"Export the database connection string as {variable}, put it in a .env file "
+            "here, or run vecshift init to set it up.",
         )
     try:
         settings = pgvector.prepare(dsn)

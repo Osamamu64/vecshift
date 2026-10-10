@@ -55,6 +55,9 @@ fi
 step "6. Switch searches to the new vectors" "vecshift cutover --yes"
 vecshift cutover --yes
 
+step "7. Check where it stands" "vecshift status"
+vecshift status
+
 printf '\nDone. Searches now use the new vectors, under the same column name.\n'
 printf 'Reports: demo/out/doctor.html and demo/out/eval.html\n'
 printf 'To switch back: docker compose run --rm --entrypoint vecshift vecshift rollback --yes\n'

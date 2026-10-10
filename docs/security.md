@@ -40,6 +40,11 @@ and how it protects credentials. To report a vulnerability, see
   - Credentials inside URLs (`https://user:pass@...`) are rejected, and URL query strings
     are hidden wherever a spec is displayed.
 - Error messages from providers are shortened and never include the request's key.
+- **`.env` files** are an optional alternative to exporting variables. They're read from
+  the current folder (or `--env-file`), never override variables already set, and
+  vecshift warns when other users can read one. `vecshift init` types secrets hidden, and
+  saves them to `.env` only when you say yes: the file is created `0600`, and init offers
+  to add it to `.gitignore`. Errors in the file name the line, never its value.
 
 ## The database
 
@@ -79,6 +84,7 @@ and how it protects credentials. To report a vulnerability, see
   token and row counts, and the IDs of rows the provider rejected, with the provider's
   error. Never row text or credentials. The directory is `0700` and the file `0600`, and
   it is replaced atomically so a crash can't leave it half-written.
+- **`.env`**: only when you choose to save to it in `vecshift init`, as above.
 - **Files you ask for**: reports and saved queries are written only where you point them.
   Saved generated queries contain the query text and document IDs.
 
@@ -97,7 +103,9 @@ markup, the browser would refuse to run it or send anything anywhere.
   - `zizmor` for GitHub Actions security
   - Ruff's flake8-bandit rules (`S`) for code patterns
 - GitHub Actions are pinned to full commit SHAs, workflows get read-only tokens, and
-  checkout doesn't persist credentials. Dependabot keeps dependencies and pins up to date.
+  checkout doesn't persist credentials. Dependabot keeps dependencies and pins up to date,
+  one grouped pull request per ecosystem a month, and only proposes releases at least two
+  weeks old (security updates aren't delayed).
 - The Docker image is built from a base image pinned by digest, installs dependencies
   from the lock file with `--require-hashes`, and runs as an unprivileged user. The demo's
   database is reachable only from the demo's own containers.

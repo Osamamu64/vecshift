@@ -1,18 +1,46 @@
 version: 2
+
+# Version updates arrive as one pull request per ecosystem each month, and only for
+# releases at least two weeks old, so a compromised or broken release has time to be
+# noticed and pulled before it reaches us. Security updates aren't delayed.
+
 updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: monthly
+    cooldown:
+      default-days: 14
+    groups:
+      github-actions:
+        patterns: ["*"]
+
   - package-ecosystem: uv
     directory: /
     schedule:
       interval: monthly
+    cooldown:
+      default-days: 14
+    groups:
+      python:
+        patterns: ["*"]
+
   - package-ecosystem: docker
     directory: /
     schedule:
       interval: monthly
+    cooldown:
+      default-days: 14
+    groups:
+      docker:
+        patterns: ["*"]
+
   - package-ecosystem: docker-compose
     directory: /demo
     schedule:
       interval: monthly
+    cooldown:
+      default-days: 14
+    groups:
+      demo:
+        patterns: ["*"]

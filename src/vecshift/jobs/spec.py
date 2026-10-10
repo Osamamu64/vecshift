@@ -167,9 +167,42 @@ def load_job(path: Path) -> JobSpec:
         raise JobError(f"{path} has problems:\n{format_errors(exc)}") from exc
 
 
-def template(table: str, model: str, column: str = "embedding_v2") -> str:
-    """A commented job file to start from. Values are quoted, so any input stays valid YAML."""
+def template(
+    table: str,
+    model: str,
+    column: str = "embedding_v2",
+    *,
+    vector_column: str | None = None,
+    text_column: str | None = None,
+    source_model: str | None = None,
+    budget_usd: float | None = None,
+) -> str:
+    """A commented job file to start from. Values are quoted, so any input stays valid YAML.
+
+    Settings left as ``None`` stay commented out, with an example.
+    """
     name = json.dumps(table.split(".")[-1] + "-reembed")
+
+    def setting(key: str, value: object, example: str, note: str) -> str:
+        if value is None:
+            return f"# {key}: {example}".ljust(29) + f"  # {note}"
+        return f"{key}: {json.dumps(value)}".ljust(29) + f"  # {note}"
+
+    vector = setting(
+        "vector_column", vector_column, "embedding", "needed only if the table has several"
+    )
+    text = setting(
+        "text_column", text_column, "content", "detected automatically when it's a common name"
+    )
+    old = setting(
+        "model",
+        source_model,
+        "openai/text-embedding-3-small",
+        "the model that made the current vectors, for eval",
+    )
+    budget = setting(
+        "budget_usd", budget_usd, "50", "plan fails if the estimate is higher; apply stops there"
+    )
     return f"""# vecshift job: re-embed a pgvector column with a new model, side by side.
 # Check it with `vecshift plan`. Nothing is changed until `vecshift apply`.
 version: 1
@@ -180,9 +213,9 @@ source:
   # The connection string is read from this environment variable, never from this file.
   dsn_env: VECSHIFT_DSN
   table: {json.dumps(table)}
-  # vector_column: embedding     # needed only if the table has several
-  # text_column: content         # detected automatically when it's a common name
-  # model: openai/text-embedding-3-small  # the model that made the current vectors, for eval
+  {vector}
+  {text}
+  {old}
 
 target:
   # New vectors go in this column next to the old ones. Cutover renames the two columns
@@ -196,7 +229,7 @@ target:
 model: {json.dumps(model)}
 
 limits:
-  # budget_usd: 50               # plan fails if the estimate is higher; apply stops there
+  {budget}
   # tokens_per_minute: 1000000   # your provider rate limit, for the duration estimate
   # requests_per_minute: 3000
 """
