@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Annotated, Any
 import typer
 
 from vecshift.cli_plan import DEFAULT_JOB, _fail, load
+from vecshift.migrate.engine import SETTLED_ROWS, SETTLED_SHARE
 
 if TYPE_CHECKING:
     import psycopg
@@ -335,6 +336,8 @@ def eval_(
         raise
 
     pending, done = (int(missing[0]), int(missing[1])) if missing else (0, 0)
+    # A busy table always has a few rows waiting for a vector; that's not a partial migration.
+    partial = pending > max(SETTLED_ROWS, SETTLED_SHARE * done)
     if not done:
         conn.close()
         raise _fail("The new column has no vectors yet.", "Run apply (or apply --until 10).")
@@ -347,7 +350,7 @@ def eval_(
         types={"old": names[cols.old], "new": names[cols.new]},
         extension_schema=target.extension_schema,
         metric=metric,
-        partial=pending > 0,
+        partial=partial,
         group=group,
     )
     old = SideReport("old", cols.old, old_spec.name if old_spec else None)
@@ -390,7 +393,7 @@ def eval_(
                 new=new,
                 dims={k: (int(v[0]) if v and v[0] > 0 else None) for k, v in dims.items()},
                 source=source,
-                partial=pending > 0,
+                partial=partial,
                 gates=Gates(tolerance, min_slice, max_p95_ms, max_slowdown),
                 notes=notes,
                 on_step=(lambda s: None) if output_json else _step,

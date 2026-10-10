@@ -287,7 +287,7 @@ def test_busy_table_still_finishes(state: JobState) -> None:
     result, _ = run(table, FakeModel(), state)
     assert result.status == "complete" and result.index == "built"
     assert 0 < result.remaining <= 100
-    assert "changed in the last moments" in (result.message or "")
+    assert "changed during the run" in (result.message or "")
 
 
 def test_writes_faster_than_embedding_stop(state: JobState) -> None:

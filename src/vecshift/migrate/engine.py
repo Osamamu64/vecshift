@@ -251,6 +251,8 @@ async def apply(
             on_event(Event("index", {"state": "building", "method": index[0]}))
             result.index = writer.build_index(index[0], index[1], state.rows_written)
             on_event(Event("index", {"state": result.index}))
+            # A big index takes minutes, and a busy table keeps changing meanwhile.
+            result.remaining = writer.pending_count(tuple(state.failed))
         sizes = writer.dimensions_in_use()
         if sizes and sizes != {dims}:
             return finish("failed", f"Found vectors of sizes {sorted(sizes)} in the new column.")
@@ -262,8 +264,8 @@ async def apply(
         if result.remaining:
             return finish(
                 "complete",
-                f"Every row has a new vector except {result.remaining:,} that changed in the "
-                f"last moments; cutover (or the next apply) embeds them.{failed_note}",
+                f"Every row has a new vector except {result.remaining:,} that changed during "
+                f"the run; cutover (or the next apply) embeds them.{failed_note}",
             )
         return finish("complete", f"Every row with text has a new vector.{failed_note}")
     finally:
