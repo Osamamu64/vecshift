@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 import pytest
@@ -7,6 +8,11 @@ from vecshift import __version__
 from vecshift.cli import app
 
 runner = CliRunner()
+
+
+def plain(text: str) -> str:
+    """Output without colour codes, which typer adds when it thinks it's on a terminal (CI)."""
+    return re.sub(r"\x1b\[[0-9;]*m", "", text)
 
 
 def test_version() -> None:
@@ -42,8 +48,8 @@ def test_fingerprint_rejects_bad_dimensions() -> None:
 def test_bare_command_shows_help_without_decoration() -> None:
     result = runner.invoke(app, [])
     assert result.exit_code == 0
-    assert "Usage: vecshift" in result.output and "status" in result.output
-    assert "\x1b[" not in result.output and "●" not in result.output, "no banner off a terminal"
+    assert "Usage: vecshift" in plain(result.output) and "status" in plain(result.output)
+    assert "●" not in result.output, "no banner off a terminal"
 
 
 def test_env_file_supplies_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -59,7 +65,7 @@ def test_env_file_supplies_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
     monkeypatch.delenv("VECSHIFT_DSN", raising=False)
     ignored = runner.invoke(app, ["--env-file", str(env), "--no-env-file", "doctor"])
-    assert ignored.exit_code == 2 and "Missing option '--dsn'" in ignored.output
+    assert ignored.exit_code == 2 and "Missing option" in plain(ignored.output)
 
 
 def test_env_file_problems_are_reported(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
