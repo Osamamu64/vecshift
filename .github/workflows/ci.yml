@@ -100,3 +100,47 @@ jobs:
           uvx pip-audit==2.10.1 --strict -r requirements-audit.txt
       - name: GitHub Actions workflow security
         run: uvx zizmor==1.30.1 --offline .github/workflows/
+
+  package:
+    name: Package
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+      - run: uv build
+      - name: PyPI metadata and README render
+        run: uvx twine==6.2.0 check --strict dist/*
+      - name: The wheel installs and runs on its own
+        run: |
+          uv venv /tmp/wheel-test
+          uv pip install --python /tmp/wheel-test/bin/python dist/*.whl
+          /tmp/wheel-test/bin/vecshift --version
+          /tmp/wheel-test/bin/python -c "from importlib.resources import files; assert files('vecshift').joinpath('assets/report.js').is_file()"
+
+  demo:
+    name: Docker image and demo
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # Docker Hub's images through Google's mirror (same digests), to avoid rate limits.
+      PYTHON_IMAGE: mirror.gcr.io/library/python:3.13-slim@sha256:70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c10bc3a5678c2f
+      PGVECTOR_IMAGE: mirror.gcr.io/pgvector/pgvector:pg17@sha256:ac08538c6f8b9904c33c8224c5e5706dbe760aca29db1d096972b4052c22a75d
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Run the offline demo end to end
+        working-directory: demo
+        run: |
+          chmod a+w out
+          docker compose up --build --abort-on-container-exit --exit-code-from vecshift
+          test -s out/eval.html
+      - name: Roll back
+        working-directory: demo
+        run: docker compose run --rm --entrypoint vecshift vecshift rollback --yes
+      - if: always()
+        working-directory: demo
+        run: docker compose down --volumes

@@ -195,3 +195,9 @@ def test_json_shape() -> None:
         "cutover",
     }
     assert data["estimates"]["rows"] == 10_000
+
+
+def test_hash_model_is_allowed_with_a_warning() -> None:
+    p = plan_for(job(model="hash/256"))
+    assert ids(p)["plan.baseline_model"] is Severity.WARNING
+    assert p.ok and p.dimensions == 256 and p.estimates.cost_usd == 0

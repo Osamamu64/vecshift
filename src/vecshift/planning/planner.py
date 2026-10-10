@@ -90,6 +90,18 @@ def _model_findings(spec: ModelSpec, findings: list[Finding]) -> None:
             )
         )
 
+    if spec.provider == "hash":
+        findings.append(
+            Finding(
+                "plan.baseline_model",
+                Severity.WARNING,
+                "This is a test model",
+                f"{spec.name} is vecshift's built-in hashing baseline: it matches words, not "
+                "meaning. It's for trying vecshift out, not for real searches.",
+                hint="Use a real embedding model for production data.",
+            )
+        )
+
     if spec.provider == "openai" and spec.key_env and not os.environ.get(spec.key_env):
         findings.append(
             Finding(

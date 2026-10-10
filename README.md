@@ -9,7 +9,7 @@
 
 [![CI](https://github.com/Osamamu64/vecshift/actions/workflows/ci.yml/badge.svg)](https://github.com/Osamamu64/vecshift/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-![Status: pre-alpha](https://img.shields.io/badge/status-pre--alpha-orange)
+![Status: alpha](https://img.shields.io/badge/status-alpha-orange)
 
 > [!WARNING]
 > VecShift is in early development. The full pgvector workflow works today: `doctor`,
@@ -57,16 +57,39 @@ mock provider for trying things out.
   provider you choose.
 - **Free first run.** Mock embeddings and a local store, so you can try it without an API key.
 
-## Quick start (from source)
+## Install
 
-Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/).
+Requires Python 3.11 or newer.
+
+```bash
+pip install vecshift          # or: uv tool install vecshift
+vecshift --help
+```
+
+Or run it without installing, with [uv](https://docs.astral.sh/uv/) or Docker:
+
+```bash
+uvx vecshift --help
+docker run --rm -e VECSHIFT_DSN ghcr.io/osamamu64/vecshift doctor --table public.documents
+```
+
+## Try it in two minutes
+
+The demo runs a whole migration on a sample table of English and Arabic articles: check
+the index, plan, re-embed without locking the table, compare old and new, then switch.
+It runs offline with vecshift's built-in test model, so there's no API key and nothing
+leaves your machine.
 
 ```bash
 git clone https://github.com/Osamamu64/vecshift.git
-cd vecshift
-uv sync
-uv run vecshift --help
+cd vecshift/demo
+docker compose up --build --abort-on-container-exit
 ```
+
+The reports land in `demo/out/`. See [the demo guide](docs/demo.md) for what each step
+shows.
+
+## Usage
 
 ### Check an existing pgvector or Supabase index
 
@@ -74,7 +97,7 @@ uv run vecshift --help
 
 ```bash
 export VECSHIFT_DSN='postgresql://postgres.<project-ref>:<password>@<region>.pooler.supabase.com:5432/postgres'
-uv run vecshift doctor --table public.documents
+vecshift doctor --table public.documents
 ```
 
 Abridged output:
@@ -109,7 +132,7 @@ security, and a read-only role recipe.
 ### Find the best embedding model for your data
 
 ```bash
-uv run vecshift bench --docs docs.jsonl \
+vecshift bench --docs docs.jsonl \
   -m openai/text-embedding-3-small -m openai/text-embedding-3-large,dims=256 \
   -m ollama/nomic-embed-text --html leaderboard.html
 ```
@@ -123,8 +146,8 @@ the [benchmarking guide](docs/bench.md).
 ### Plan a migration
 
 ```bash
-uv run vecshift init --table public.documents --model openai/text-embedding-3-large,dims=1024
-uv run vecshift plan
+vecshift init --table public.documents --model openai/text-embedding-3-large,dims=1024
+vecshift plan
 ```
 
 `init` writes a commented `vecshift.yaml`. `plan` checks it against the database without
@@ -134,7 +157,7 @@ anything that would make the migration fail.
 ### Run it
 
 ```bash
-uv run vecshift apply
+vecshift apply
 ```
 
 `apply` adds the new column next to the old one, embeds every row, and builds the index
@@ -142,10 +165,10 @@ concurrently, while your application keeps reading and writing. It stops cleanly
 Ctrl-C, at your budget, or part way with `--until 50`, and running it again resumes.
 
 ```bash
-uv run vecshift eval              # better on your data, and how fast? GO / NO-GO
-uv run vecshift cutover --check   # safe to switch?
-uv run vecshift cutover           # searches use the new vectors, under the same column name
-uv run vecshift rollback          # undo, instantly
+vecshift eval              # better on your data, and how fast? GO / NO-GO
+vecshift cutover --check   # safe to switch?
+vecshift cutover           # searches use the new vectors, under the same column name
+vecshift rollback          # undo, instantly
 ```
 
 Your application's SQL doesn't change: cutover gives the new vectors the column name it
@@ -173,7 +196,7 @@ Details in [Running a migration](docs/migrations.md#at-scale).
 Get the fingerprint of an embedding configuration:
 
 ```console
-$ uv run vecshift fingerprint --provider openai --model text-embedding-3-small --dimensions 1536
+$ vecshift fingerprint --provider openai --model text-embedding-3-small --dimensions 1536
 openai/text-embedding-3-small@1536#a3ac94a82eca
 ```
 
@@ -182,6 +205,7 @@ produces a different tag, because it's a different vector space.
 
 ## Documentation
 
+- [Demo](docs/demo.md): a full migration on sample data, offline, with Docker
 - [Running a migration](docs/migrations.md): the job file, `plan`, `apply`, `cutover`, and `rollback`
 - [Evaluating a migration](docs/eval.md): quality per language, latency vs accuracy, and the verdict
 - [Benchmarking embedding models](docs/bench.md): sources, model specs, query types, and metrics

@@ -55,6 +55,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- A Docker image that runs as a non-root user, and an offline demo:
+  `cd demo && docker compose up` runs doctor, plan, apply, eval, and cutover on a sample
+  table of English and Arabic articles, with no API key. See `docs/demo.md`.
+- Job files accept the built-in `hash/N` models, for trying vecshift out; `plan` warns
+  that they're test models (`plan.baseline_model`).
 - `vecshift eval` compares the old and new vectors on your data before cutover, without
   re-embedding documents. It reports recall@1, recall@10, and MRR@10 overall and for each
   query → document script pair (Arabic and Latin), how much the top results changed,
