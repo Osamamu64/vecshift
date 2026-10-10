@@ -103,7 +103,9 @@ markup, the browser would refuse to run it or send anything anywhere.
   - `zizmor` for GitHub Actions security
   - Ruff's flake8-bandit rules (`S`) for code patterns
 - GitHub Actions are pinned to full commit SHAs, workflows get read-only tokens, and
-  checkout doesn't persist credentials. Dependabot keeps dependencies and pins up to date.
+  checkout doesn't persist credentials. Dependabot keeps dependencies and pins up to date,
+  one grouped pull request per ecosystem a month, and only proposes releases at least two
+  weeks old (security updates aren't delayed).
 - The Docker image is built from a base image pinned by digest, installs dependencies
   from the lock file with `--require-hashes`, and runs as an unprivileged user. The demo's
   database is reachable only from the demo's own containers.
