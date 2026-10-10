@@ -147,9 +147,9 @@ def doctor(
     warn_if_password_on_command_line(ctx, dsn)
     try:
         from vecshift.connectors import pgvector
-    except ImportError as exc:  # pragma: no cover - depends on installed extras
+    except ImportError as exc:  # pragma: no cover - a broken install
         typer.secho(
-            "The PostgreSQL driver isn't installed. Run: pip install 'vecshift[postgres]'",
+            "The PostgreSQL driver is missing. Reinstall: pip install --force-reinstall vecshift",
             err=True,
             fg=typer.colors.RED,
         )

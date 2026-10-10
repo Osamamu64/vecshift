@@ -314,3 +314,39 @@ def test_eval_only_reads() -> None:
 
     source = Path(cli_eval.__file__).read_text(encoding="utf-8")
     assert "pgvector.connect(settings)" in source and "connect_writer" not in source
+
+
+# --- Images and workflows run pinned, least-privileged code
+
+REPO = Path(__file__).resolve().parent.parent
+DIGEST = re.compile(r"@sha256:[0-9a-f]{64}$")
+
+
+def test_docker_image_is_pinned_and_runs_as_a_user() -> None:
+    dockerfile = (REPO / "Dockerfile").read_text(encoding="utf-8")
+    default = re.search(r"^ARG PYTHON_IMAGE=(\S+)$", dockerfile, re.M)
+    assert default and DIGEST.search(default.group(1))
+    assert re.findall(r"^FROM (\S+)", dockerfile, re.M) == ["${PYTHON_IMAGE}"] * 2
+    users = re.findall(r"^USER (\S+)$", dockerfile, re.M)
+    assert users and users[-1] not in {"root", "0"}
+    assert "--require-hashes" in dockerfile, "dependencies are checked against the lock file"
+
+
+def test_demo_keeps_its_database_private() -> None:
+    import yaml
+
+    compose = yaml.safe_load((REPO / "demo" / "compose.yaml").read_text(encoding="utf-8"))
+    for name, service in compose["services"].items():
+        assert "ports" not in service, f"{name} publishes a port"
+        assert "privileged" not in service and "network_mode" not in service
+    image = re.fullmatch(r"\$\{\w+:-(.+)\}", compose["services"]["db"]["image"])
+    assert image and DIGEST.search(image.group(1))
+
+
+def test_workflow_actions_are_pinned_to_commits() -> None:
+    for workflow in (REPO / ".github" / "workflows").glob("*.yml"):
+        for line in workflow.read_text(encoding="utf-8").splitlines():
+            if match := re.search(r"uses:\s*(\S+)(.*)", line):
+                action, comment = match.groups()
+                assert re.search(r"@[0-9a-f]{40}$", action), f"{workflow.name}: {action}"
+                assert re.match(r"\s*# v\d", comment), f"{workflow.name}: {action} needs # vX"

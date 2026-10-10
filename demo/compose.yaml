@@ -1,0 +1,42 @@
+# A complete migration on a sample table, fully offline:
+#
+#   cd demo && docker compose up --build --abort-on-container-exit
+#
+# The database is local to this demo and its port isn't published. See docs/demo.md.
+name: vecshift-demo
+
+services:
+  db:
+    image: ${PGVECTOR_IMAGE:-pgvector/pgvector:pg17@sha256:ac08538c6f8b9904c33c8224c5e5706dbe760aca29db1d096972b4052c22a75d}
+    environment:
+      POSTGRES_PASSWORD: demo-only
+    # Parallel index builds use shared memory; Docker's default 64 MB is too small.
+    shm_size: 1g
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  vecshift:
+    build:
+      context: ..
+      args:
+        PYTHON_IMAGE: ${PYTHON_IMAGE:-python:3.13-slim@sha256:70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c10bc3a5678c2f}
+    image: vecshift:demo
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      VECSHIFT_DSN: postgresql://postgres:demo-only@db:5432/postgres
+    working_dir: /home/vecshift
+    volumes:
+      - ./seed.py:/demo/seed.py:ro
+      - ./run.sh:/demo/run.sh:ro
+      - ./out:/demo/out
+      - work:/home/vecshift
+    entrypoint: ["sh", "/demo/run.sh"]
+
+volumes:
+  # The job file and its progress, so `rollback` and `cleanup` work after the demo.
+  work:

@@ -98,6 +98,12 @@ markup, the browser would refuse to run it or send anything anywhere.
   - Ruff's flake8-bandit rules (`S`) for code patterns
 - GitHub Actions are pinned to full commit SHAs, workflows get read-only tokens, and
   checkout doesn't persist credentials. Dependabot keeps dependencies and pins up to date.
+- The Docker image is built from a base image pinned by digest, installs dependencies
+  from the lock file with `--require-hashes`, and runs as an unprivileged user. The demo's
+  database is reachable only from the demo's own containers.
+- Releases are built and published by GitHub Actions from a version tag: to PyPI with
+  trusted publishing (no stored token) and attestations, and to `ghcr.io` with a signed
+  build provenance attestation and an SBOM. See [RELEASING.md](../RELEASING.md).
 
 ## For maintainers
 

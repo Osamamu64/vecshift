@@ -42,7 +42,6 @@ def test_empty_sections_mean_defaults(tmp_path: Path) -> None:
         ("source: {table: docs}\nmodel: ollama/x\nsurprise: 1\n", "surprise: unknown setting"),
         ("source: {table: 'docs; drop'}\nmodel: ollama/x\n", "plain identifier"),
         ("source: {table: a.b.c}\nmodel: ollama/x\n", "schema.table"),
-        ("source: {table: docs}\nmodel: hash/64\n", "baselines"),
         ("source: {table: docs}\nmodel: acme/x\n", "Unknown provider"),
         ("source: {table: docs}\nmodel: ollama/x\nlimits: {budget_usd: -1}\n", "budget_usd"),
         ("source: {table: docs}\nmodel: ollama/x\ntarget: {index: btree}\n", "target.index"),

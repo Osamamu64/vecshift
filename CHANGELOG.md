@@ -7,6 +7,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.0]
+
+The first release.
+
 ### Security
 
 - API keys are never sent over unencrypted `http://` to remote hosts, redirects are never
@@ -50,6 +54,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- A Docker image that runs as a non-root user, and an offline demo:
+  `cd demo && docker compose up` runs doctor, plan, apply, eval, and cutover on a sample
+  table of English and Arabic articles, with no API key. See `docs/demo.md`.
+- Job files accept the built-in `hash/N` models, for trying vecshift out; `plan` warns
+  that they're test models (`plan.baseline_model`).
 - `vecshift eval` compares the old and new vectors on your data before cutover, without
   re-embedding documents. It reports recall@1, recall@10, and MRR@10 overall and for each
   query → document script pair (Arabic and Latin), how much the top results changed,
@@ -126,3 +135,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `EmbeddingFingerprint` and model tags that identify a vector space.
 - `Capability` flags and plugin contracts for sources, targets, and embedding providers.
 - `vecshift fingerprint` and `vecshift --version` commands.
+
+[Unreleased]: https://github.com/Osamamu64/vecshift/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/Osamamu64/vecshift/releases/tag/v0.1.0

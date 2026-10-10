@@ -3,10 +3,10 @@
 VecShift reads from PostgreSQL tables with [pgvector](https://github.com/pgvector/pgvector)
 columns, including Supabase projects.
 
-Install the PostgreSQL extra:
+The PostgreSQL driver comes with VecShift:
 
 ```bash
-pip install 'vecshift[postgres]'
+pip install vecshift
 ```
 
 ## Running `doctor`

@@ -131,11 +131,9 @@ class JobSpec(_Strict):
     @classmethod
     def _model(cls, value: str) -> str:
         try:
-            spec = parse_spec(value)
+            parse_spec(value)
         except SpecError as exc:
             raise ValueError(str(exc)) from None
-        if spec.provider == "hash":
-            raise ValueError("hash models are baselines for bench, not for migrating")
         return value
 
 

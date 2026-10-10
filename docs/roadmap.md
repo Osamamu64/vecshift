@@ -64,7 +64,7 @@ Read-only tools. No writes to your stores, no production risk.
   - [x] works on a partial (`--until`) migration
   - [x] an HTML report with the latency vs accuracy chart
   - [ ] an LLM judge for results the two sides disagree on
-- Docker image and a docker-compose demo
+- [x] PyPI package, Docker image, and an offline docker compose demo
 
 ### Two kinds of migration
 

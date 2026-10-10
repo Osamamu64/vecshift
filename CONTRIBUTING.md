@@ -94,5 +94,7 @@ that run against a real instance in a container.
 - Update [CHANGELOG.md](CHANGELOG.md) under **Unreleased**.
 - Write commit messages in the imperative mood ("Add pgvector source", not "Added").
 
+Maintainers publish releases as described in [RELEASING.md](RELEASING.md).
+
 By contributing, you agree that your contributions are licensed under the
 [Apache License 2.0](LICENSE).
