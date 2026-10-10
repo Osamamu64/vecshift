@@ -191,8 +191,19 @@ def _queries(
 
 
 def _confirm(sends: list[tuple[str, str]], count: int, yes: bool) -> None:
+    from vecshift import ui
+
     remote = [(name, url) for name, url in sends if url]
     if not remote:
+        return
+    if ui.fancy():
+        ui.warn("eval sends text to:")
+        ui.kv([(name, url, "") for name, url in remote], indent=4)
+        ui.note(
+            f"  About {count:,} short queries (sentences from your rows, or generated from them)."
+        )
+        if not yes and not ui.confirm("Continue?", default=False):
+            raise typer.Exit(1)
         return
     out = sys.stderr
     print("eval sends text to:", file=out)
@@ -355,6 +366,7 @@ def eval_(
     )
     old = SideReport("old", cols.old, old_spec.name if old_spec else None)
     new = SideReport("new", cols.new, spec.name)
+    progress = _Steps()
     try:
         rows = searcher.sample(text, max(num_queries * 3, neighbours))
         if not rows:
@@ -396,10 +408,11 @@ def eval_(
                 partial=partial,
                 gates=Gates(tolerance, min_slice, max_p95_ms, max_slowdown),
                 notes=notes,
-                on_step=(lambda s: None) if output_json else _step,
+                on_step=(lambda s: None) if output_json else progress.step,
             )
         )
     finally:
+        progress.stop()
         conn.close()
 
     if group_name:
@@ -423,8 +436,31 @@ def eval_(
         raise typer.Exit(EXIT_INCONCLUSIVE)
 
 
-def _step(message: str) -> None:
-    typer.secho(f"  {message}…", dim=True, err=True)
+class _Steps:
+    """eval's progress: a spinner at a colour terminal, dim lines elsewhere."""
+
+    def __init__(self) -> None:
+        from vecshift import ui
+
+        self.ui = ui
+        self.status: Any = None
+
+    def step(self, message: str) -> None:
+        if not self.ui.fancy():
+            typer.secho(f"  {message}…", dim=True, err=True)
+            return
+        if self.status is None:
+            self.status = self.ui.console.status(
+                f"{message}…", spinner="dots", spinner_style=self.ui.ACCENT
+            )
+            self.status.start()
+        else:
+            self.status.update(f"{message}…")
+
+    def stop(self) -> None:
+        if self.status is not None:
+            self.status.stop()
+            self.status = None
 
 
 async def _evaluate(
@@ -497,7 +533,134 @@ def _change(before: float | None, after: float | None) -> str:
     return typer.style(f"{delta:+.3f}", fg=color)
 
 
+def _delta(before: float | None, after: float | None) -> Any:
+    from rich.text import Text
+
+    if before is None or after is None:
+        return Text("")
+    delta = after - before
+    colour = "green" if delta > 0.005 else "red" if delta < -0.005 else "dim"
+    return Text(f"{delta:+.3f}", style=colour)
+
+
+def _render_fancy(report: EvalReport, name: str) -> None:
+    from rich.text import Text
+
+    from vecshift import ui
+
+    old, new = report.old, report.new
+    ui.title("eval", name)
+    kind = "partial migration" if report.partial else "complete migration"
+    ui.kv(
+        [
+            ("Old", Text.assemble(old.column, (f"  {old.model or 'model unknown'}", "dim")), ""),
+            ("New", Text.assemble(new.column, (f"  {new.model}", "dim")), ""),
+            ("Queries", f"{report.queries:,} {report.query_source}", kind),
+        ]
+    )
+    for side in (old, new):
+        if side.note:
+            ui.warn(f"  {side.note}")
+
+    if new.scores:
+        ui.section("Search quality")
+        rows: list[list[str | Text]] = []
+        for key, after in new.scores.items():
+            before = old.scores.get(key)
+            label = f"Recall@10 · {'all queries' if key == 'all' else key} ({after.queries})"
+            b = before.recall_at_10 if before else None
+            rows.append([label, _num(b), _num(after.recall_at_10), _delta(b, after.recall_at_10)])
+        a_old, a_new = old.scores.get("all"), new.scores.get("all")
+        for label, attr in (("Recall@1 · all", "recall_at_1"), ("MRR@10 · all", "mrr_at_10")):
+            b = getattr(a_old, attr) if a_old else None
+            a = getattr(a_new, attr) if a_new else None
+            rows.append([label, _num(b), _num(a), _delta(b, a)])
+        ui.table(["", "old", "new", "change"], rows, right=frozenset({1, 2, 3}))
+        if report.result_overlap is not None:
+            ui.detail(f"Top-10 results in common: {report.result_overlap:.0%}")
+
+    if old.same_group_at_10 is not None or report.neighbour_overlap is not None:
+        ui.section("Nearest rows (from stored vectors)")
+        if old.same_group_at_10 is not None or new.same_group_at_10 is not None:
+            ui.table(
+                ["", "old", "new", "change"],
+                [
+                    [
+                        "Same document in top 10",
+                        _num(old.same_group_at_10),
+                        _num(new.same_group_at_10),
+                        _delta(old.same_group_at_10, new.same_group_at_10),
+                    ]
+                ],
+                right=frozenset({1, 2, 3}),
+            )
+        if report.neighbour_overlap is not None:
+            ui.detail(f"Nearest rows in common: {report.neighbour_overlap:.0%}")
+
+    if old.sweep or new.sweep or old.embed_latency or new.embed_latency:
+        ui.section("Latency vs accuracy")
+        rows = []
+        for side in (old, new):
+            setting = {"hnsw": "ef_search", "ivfflat": "probes"}.get(side.method or "", "exact")
+            lat = side.embed_latency
+            embed = f"{_ms(lat.p50_ms)} / {_ms(lat.p95_ms)}" if lat else "—"
+            for i, point in enumerate(side.sweep):
+                lp = point.latency
+                p50, p95, p99 = (lp.p50_ms, lp.p95_ms, lp.p99_ms) if lp else (None, None, None)
+                value = point.setting if point.setting is not None else "—"
+                where = Text(side.side if i == 0 else "", style="bold")
+                knob = Text(f"{setting}={value}")
+                if point.current:
+                    knob.append(" ●", style=ui.ACCENT)
+                rows.append(
+                    [
+                        where,
+                        knob,
+                        _num(point.index_recall),
+                        _ms(p50),
+                        _ms(p95),
+                        _ms(p99),
+                        embed if i == 0 else "",
+                    ]
+                )
+        ui.table(
+            ["", "setting", "index recall", "p50", "p95", "p99", "embed p50 / p95"],
+            rows,
+            right=frozenset({2, 3, 4, 5}),
+        )
+        samples = next((p.latency.samples for p in new.sweep if p.latency), 0)
+        ui.note(
+            f"  ● current setting · {samples} queries per setting · search times include the "
+            "network round trip"
+        )
+        ui.detail(
+            f"End-to-end p95 (embed + search): old {_ms(old.end_to_end_p95)} · "
+            f"new {_ms(new.end_to_end_p95)}"
+        )
+
+    for note in report.notes:
+        ui.console.print()
+        ui.note(f"  {note}")
+    verdict = report.verdict
+    label, kind = {
+        "go": ("GO", "ok"),
+        "no_go": ("NO-GO", "error"),
+        "inconclusive": ("INCONCLUSIVE", "warn"),
+    }[verdict.status]
+    ui.verdict(f"Verdict: {label}", kind)
+    for reason in verdict.reasons:
+        ui.detail(f"✖ {reason}" if verdict.status != "go" else reason)
+    for warning in verdict.warnings:
+        ui.warn(f"    {warning}")
+    ui.console.print()
+
+
 def _render(report: EvalReport, name: str) -> None:
+    from vecshift import ui
+
+    if ui.fancy():
+        _render_fancy(report, name)
+        return
     old, new = report.old, report.new
     typer.secho(f"vecshift eval · {name}", bold=True)
     typer.echo(f"  Old  {old.column} · {old.model or 'model unknown'}")

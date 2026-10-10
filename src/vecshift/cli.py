@@ -11,7 +11,7 @@ import typer
 
 from vecshift import __version__
 from vecshift.cli_style import STYLE as _STYLE
-from vecshift.cli_style import banner, warn_if_password_on_command_line
+from vecshift.cli_style import warn_if_password_on_command_line
 from vecshift.cli_style import wrap as _wrap
 from vecshift.core.fingerprint import EmbeddingFingerprint
 from vecshift.doctor import Report, Severity, run_checks
@@ -80,7 +80,9 @@ def main(
     """Safe, observable embedding migrations for any vector store."""
     _load_env_file(None if no_env_file else env_file)
     if ctx.invoked_subcommand is None:
-        banner(__version__, TAGLINE)
+        from vecshift import ui
+
+        ui.banner(__version__, TAGLINE)
         typer.echo(ctx.get_help())
 
 
@@ -119,7 +121,39 @@ class FailOn(StrEnum):
     ERROR = "error"
 
 
+def _render_fancy(report: Report, connection: str) -> None:
+    from rich.text import Text
+
+    from vecshift import ui
+
+    dims = f"({report.declared_dimensions})" if report.declared_dimensions else ""
+    rows = f"~{report.estimated_rows:,}" if report.estimated_rows is not None else "unknown"
+    ui.title("doctor", f"{report.store} via {connection}")
+    ui.kv(
+        [
+            ("Target", Text.assemble(report.target, (f"  {report.vector_type}{dims}", "dim")), ""),
+            ("Rows", rows, f"inspected {report.sample_rows:,}, {report.sample_method}"),
+        ]
+    )
+    ui.section("Findings")
+    ui.findings(report.sorted_findings())
+    summary = Text("  ")
+    for severity, (_, _, name) in _STYLE.items():
+        n = report.count(severity)
+        icon, colour, _ = ui.SEVERITY_STYLE[severity.value]
+        plural = "s" if n != 1 and name in ("error", "warning") else ""
+        summary.append(f"{icon} {n} {name}{plural}   ", style=colour if n else "dim")
+    ui.console.print()
+    ui.console.print(summary)
+    ui.console.print()
+
+
 def _render(report: Report, connection: str) -> None:
+    from vecshift import ui
+
+    if ui.fancy():
+        _render_fancy(report, connection)
+        return
     dims = f"({report.declared_dimensions})" if report.declared_dimensions else ""
     rows = f"~{report.estimated_rows:,}" if report.estimated_rows is not None else "unknown"
     typer.secho(f"vecshift doctor · {report.store} via {connection}", bold=True)

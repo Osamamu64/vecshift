@@ -12,16 +12,14 @@ import os
 import shutil
 import subprocess
 import sys
-from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated
 
 import typer
 
-from vecshift import __version__
+from vecshift import __version__, ui
 from vecshift.cli_plan import DEFAULT_JOB, _fail
-from vecshift.cli_style import banner
 
 if TYPE_CHECKING:
     import psycopg
@@ -44,6 +42,9 @@ MODEL_CHOICES = (
 def interactive() -> bool:
     """Whether a person is at the terminal to answer questions."""
     return sys.stdin.isatty() and sys.stdout.isatty()
+
+
+STEPS = 4
 
 
 @dataclass(slots=True)
@@ -124,11 +125,6 @@ def _write(output: Path, text: str, *, force: bool) -> None:
 # --- the guided flow
 
 
-def _step(text: str) -> None:
-    typer.echo()
-    typer.secho(text, bold=True)
-
-
 def _guided(
     ctx: typer.Context,
     table: str | None,
@@ -137,19 +133,23 @@ def _guided(
     output: Path,
     force: bool,
 ) -> None:
-    banner(__version__, "Let's set up a migration. Nothing in your database changes yet.")
+    ui.banner(
+        __version__,
+        "Let's set up a migration.",
+        [("Job file", str(output)), ("Changes", "none until you run vecshift apply")],
+    )
     if output.exists() and not force:
-        if not typer.confirm(f"{output} already exists. Replace it?", default=False):
+        if not ui.confirm(f"{output} already exists. Replace it?", default=False):
             raise typer.Exit(1)
         force = True
 
-    _step("Database")
+    ui.step(1, STEPS, "Database")
     dsn_env, pasted, settings = _connection()
     answers = _ask(settings, table, model, dsn_env)
 
+    ui.step(4, STEPS, "Save")
     _write(output, _template(answers.table, answers.model, column, answers), force=force)
-    typer.echo()
-    typer.secho(f"✔ Wrote {output}", fg=typer.colors.GREEN)
+    ui.success(f"Wrote {output}")
 
     env_file = _env_file(ctx)
     if pasted is not None:
@@ -157,16 +157,13 @@ def _guided(
         os.environ.setdefault(dsn_env, pasted)  # for this process, so plan can run below
     _model_key(env_file, answers.model)
 
-    typer.echo()
-    if typer.confirm(
-        "Check the plan now? It reads the database and changes nothing.", default=True
-    ):
+    if ui.confirm("Check the plan now? It reads the database and changes nothing.", default=True):
         from vecshift.cli_plan import plan
 
         typer.echo()
         ctx.invoke(plan, job_file=output)
     else:
-        typer.echo(f"Next: vecshift plan {output}")
+        ui.note(f"Next: vecshift plan {output}")
 
 
 def _connection() -> tuple[str, str | None, ConnectionSettings]:
@@ -183,27 +180,26 @@ def _connection() -> tuple[str, str | None, ConnectionSettings]:
                 settings = pgvector.prepare(value)
             except pgvector.ConnectError as exc:
                 raise _fail(f"{variable} isn't usable: {exc}", exc.hint) from exc
-            typer.echo(f"Using {settings.display} from {variable}.")
+            ui.success(f"Using {settings.display} from {variable}")
             return variable, None, settings
 
-    typer.echo(
-        "Paste your PostgreSQL connection string, such as the one from Supabase's Connect "
-        "button. It's hidden as you type and isn't written to the job file."
+    ui.note(
+        "Paste your PostgreSQL connection string, such as the session pooler string from "
+        "Supabase's Connect button. It's hidden as you type and never written to the job file."
     )
     for attempt in range(1, CONNECT_TRIES + 1):
-        value = typer.prompt("Connection string", hide_input=True).strip()
+        value = ui.secret("Connection string")
         try:
             settings = pgvector.prepare(value)
-            conn = pgvector.connect(settings)
+            with ui.working("Connecting…"):
+                conn = pgvector.connect(settings)
         except pgvector.ConnectError as exc:
-            typer.secho(f"Couldn't connect: {exc}", fg=typer.colors.RED)
-            if exc.hint:
-                typer.echo(f"→ {exc.hint}")
+            ui.error(f"Couldn't connect: {exc}", exc.hint)
             if attempt == CONNECT_TRIES:
                 raise typer.Exit(2) from exc
             continue
         conn.close()
-        typer.secho(f"✔ Connected to {settings.display}", fg=typer.colors.GREEN)
+        ui.success(f"Connected to {settings.display}")
         return "VECSHIFT_DSN", value, settings
     raise typer.Exit(2)  # pragma: no cover - the loop always returns or raises
 
@@ -218,17 +214,16 @@ def _ask(
     except pgvector.ConnectError as exc:
         raise _fail(f"Couldn't connect: {exc}", exc.hint) from exc
     try:
-        _step("Vectors")
+        ui.step(2, STEPS, "Vectors")
         source = _choose_column(conn, table)
         text = _choose_text(conn, source)
     finally:
         conn.rollback()
         conn.close()
 
-    _step("Models")
+    ui.step(3, STEPS, "Models")
     old = _ask_spec(
-        "Which model made the current vectors? eval uses it to compare old and new (Enter to skip)",
-        default="",
+        "Which model made the current vectors? (optional, lets eval compare; Enter to skip)",
         optional=True,
     )
     new = model or _choose_model()
@@ -242,17 +237,6 @@ def _ask(
         budget_usd=budget,
         dsn_env=dsn_env,
     )
-
-
-def _menu(options: Sequence[str], prompt: str, default: int = 1) -> int:
-    """Print numbered options and return the chosen index (0-based)."""
-    for number, option in enumerate(options, start=1):
-        typer.echo(f"  {number}) {option}")
-    while True:
-        choice = typer.prompt(prompt, default=str(default)).strip()
-        if choice.isdigit() and 1 <= int(choice) <= len(options):
-            return int(choice) - 1
-        typer.secho(f"Pick a number from 1 to {len(options)}.", fg=typer.colors.YELLOW)
 
 
 def _estimate(conn: psycopg.Connection, relid: int) -> str:
@@ -273,15 +257,14 @@ def _choose_column(conn: psycopg.Connection, table: str | None) -> VectorColumn:
             f"No vector columns found{where}.",
             "vecshift migrates pgvector columns. Check the database and the role's access.",
         )
-    labels = [
-        f"{c.qualified}  {c.type}({c.dimensions or '?'})  {_estimate(conn, c.relid)}"
+    choices = [
+        (c.qualified, f"{c.type}({c.dimensions or '?'}) · {_estimate(conn, c.relid)}")
         for c in columns
     ]
     if len(columns) == 1:
-        typer.echo(f"Found {labels[0]}")
+        ui.success(f"Found {choices[0][0]}  {choices[0][1]}")
         return columns[0]
-    typer.echo("Vector columns found:")
-    return columns[_menu(labels, "Which one do you want to re-embed?")]
+    return columns[ui.select("Which vector column do you want to re-embed?", choices)]
 
 
 def _choose_text(conn: psycopg.Connection, source: VectorColumn) -> str:
@@ -296,37 +279,43 @@ def _choose_text(conn: psycopg.Connection, source: VectorColumn) -> str:
         )
     guess = _pick(columns, TEXT_COLUMNS, TEXT_TYPES) or texts[0]
     if len(texts) == 1:
-        typer.echo(f"Text comes from {guess}.")
+        ui.success(f"Text comes from {guess}")
         return guess
-    typer.echo("Which column holds the text the vectors were made from?")
-    return texts[_menu(texts, "Text column", default=texts.index(guess) + 1)]
+    choices = [(name, "detected" if name == guess else "") for name in texts]
+    picked = ui.select(
+        "Which column holds the text the vectors were made from?",
+        choices,
+        default=texts.index(guess),
+    )
+    return texts[picked]
 
 
-def _ask_spec(prompt: str, *, default: str, optional: bool = False) -> str | None:
+def _spec_problem(value: str) -> str | None:
     from vecshift.embeddings import SpecError, parse_spec
 
-    while True:
-        value = str(typer.prompt(prompt, default=default, show_default=bool(default))).strip()
-        if not value and optional:
-            return None
-        try:
-            parse_spec(value)
-        except SpecError as exc:
-            typer.secho(str(exc), fg=typer.colors.YELLOW)
-            continue
-        return value
+    try:
+        parse_spec(value)
+    except SpecError as exc:
+        return str(exc)
+    return None
+
+
+def _ask_spec(prompt: str, *, optional: bool = False) -> str | None:
+    def check(value: str) -> str | None:
+        if not value:
+            return None if optional else "Type a model spec."
+        return _spec_problem(value)
+
+    value = ui.text(prompt, validate=check)
+    return value or None
 
 
 def _choose_model() -> str:
-    typer.echo("Which model should make the new vectors?")
-    options = [f"{spec:<42} {note}" for spec, note in MODEL_CHOICES]
-    options.append("another model: type its spec, as for vecshift bench")
-    picked = _menu(options, "New model")
+    choices = [*MODEL_CHOICES, ("Another model", "type its spec, as for vecshift bench")]
+    picked = ui.select("Which model should make the new vectors?", choices)
     if picked < len(MODEL_CHOICES):
         return MODEL_CHOICES[picked][0]
-    return (
-        _ask_spec("Model spec, e.g. compat/my-model,url=http://localhost:8080/v1", default="") or ""
-    )
+    return _ask_spec("Model spec, e.g. compat/my-model,url=http://localhost:8080/v1") or ""
 
 
 def _ask_budget(model: str) -> float | None:
@@ -334,22 +323,22 @@ def _ask_budget(model: str) -> float | None:
 
     if parse_spec(model).price == 0:
         return None
-    while True:
-        value = typer.prompt(
-            "Spending limit in USD: plan refuses a bigger estimate and apply stops there "
-            "(Enter for none)",
-            default="",
-            show_default=False,
-        ).strip()
+
+    def check(value: str) -> str | None:
         if not value:
             return None
         try:
-            budget = float(value.lstrip("$"))
+            ok = float(value.lstrip("$")) > 0
         except ValueError:
-            budget = 0.0
-        if budget > 0:
-            return budget
-        typer.secho("Enter an amount above zero, such as 25.", fg=typer.colors.YELLOW)
+            ok = False
+        return None if ok else "Enter an amount above zero, such as 25, or leave it empty."
+
+    value = ui.text(
+        "Spending limit in USD? plan refuses a bigger estimate and apply stops there "
+        "(Enter for none)",
+        validate=check,
+    )
+    return float(value.lstrip("$")) if value else None
 
 
 # --- secrets
@@ -367,20 +356,19 @@ def _env_file(ctx: typer.Context) -> Path | None:
 def _offer_to_save(env_file: Path | None, name: str, value: str, what: str) -> None:
     from vecshift import envfile
 
-    if env_file is not None and typer.confirm(
-        f"Save the {what} to {env_file} so later commands find it? "
-        "Only your user can read the file.",
+    if env_file is not None and ui.confirm(
+        f"Save the {what} to {env_file} so later commands find it? Only your user can read it.",
         default=False,
     ):
         try:
             envfile.save(env_file, name, value)
         except OSError as exc:
-            typer.secho(f"Couldn't write {env_file}: {exc.strerror}", fg=typer.colors.RED)
+            ui.error(f"Couldn't write {env_file}: {exc.strerror}")
         else:
-            typer.secho(f"✔ Saved {name} to {env_file}", fg=typer.colors.GREEN)
+            ui.success(f"Saved {name} to {env_file}")
             _keep_out_of_git(env_file)
             return
-    typer.echo(f"Before the next command, set it in your shell: export {name}='…'")
+    ui.note(f"Before the next command, set it in your shell: export {name}='…'")
 
 
 def _keep_out_of_git(env_file: Path) -> None:
@@ -400,13 +388,13 @@ def _keep_out_of_git(env_file: Path) -> None:
         return
     if result.returncode != 1:  # 0: ignored; 128: not in a repository
         return
-    typer.secho(f"{env_file} isn't in .gitignore, so git could commit it.", fg=typer.colors.YELLOW)
+    ui.warn(f"{env_file} isn't in .gitignore, so git could commit it.")
     ignore = env_file.parent / ".gitignore"
-    if typer.confirm(f"Add it to {ignore}?", default=True):
+    if ui.confirm(f"Add it to {ignore}?", default=True):
         existing = ignore.read_text(encoding="utf-8") if ignore.exists() else ""
         separator = "" if not existing or existing.endswith("\n") else "\n"
         ignore.write_text(f"{existing}{separator}{env_file.name}\n", encoding="utf-8")
-        typer.secho(f"✔ Added {env_file.name} to {ignore}", fg=typer.colors.GREEN)
+        ui.success(f"Added {env_file.name} to {ignore}")
 
 
 def _model_key(env_file: Path | None, model: str) -> None:
@@ -416,16 +404,13 @@ def _model_key(env_file: Path | None, model: str) -> None:
     spec = parse_spec(model)
     if not spec.key_env or os.environ.get(spec.key_env):
         return
-    typer.echo()
-    typer.echo(f"{spec.name} needs an API key in {spec.key_env}, which isn't set.")
-    key = typer.prompt(
-        f"Paste the key to save it, or press Enter to set {spec.key_env} yourself later",
-        default="",
-        show_default=False,
-        hide_input=True,
-    ).strip()
+    ui.note(f"{spec.name} needs an API key in {spec.key_env}, which isn't set.")
+    key = ui.secret(
+        f"Paste your {spec.key_env} to save it, or press Enter to set it yourself later",
+        allow_empty=True,
+    )
     if key:
         _offer_to_save(env_file, spec.key_env, key, "API key")
         os.environ.setdefault(spec.key_env, key)  # for this process only
     else:
-        typer.echo(f"Set {spec.key_env} before running vecshift apply.")
+        ui.note(f"Set {spec.key_env} before running vecshift apply.")

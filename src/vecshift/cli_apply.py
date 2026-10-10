@@ -83,6 +83,82 @@ class _Progress:
             self.last_print = time.monotonic()
 
 
+class _FancyProgress:
+    """A live progress bar and spinners, for a person at a colour terminal."""
+
+    def __init__(self) -> None:
+        from rich.progress import (
+            BarColumn,
+            MofNCompleteColumn,
+            Progress,
+            SpinnerColumn,
+            TextColumn,
+            TimeRemainingColumn,
+        )
+
+        from vecshift import ui
+
+        self.ui = ui
+        self.started = time.monotonic()
+        self.progress = Progress(
+            SpinnerColumn(style=ui.ACCENT),
+            TextColumn("{task.description}"),
+            BarColumn(complete_style=ui.ACCENT, finished_style="green", bar_width=32),
+            MofNCompleteColumn(),
+            TextColumn("[dim]{task.fields[rate]}"),
+            TextColumn("[dim]{task.fields[cost]}"),
+            TimeRemainingColumn(compact=True),
+            console=ui.console,
+            transient=False,
+        )
+        self.task: Any = None
+        self.status: Any = None
+        self.done = 0
+
+    def __call__(self, event: Event) -> None:
+        ui, d = self.ui, event.data
+        if event.kind == "column" and d["added"]:
+            ui.success("Added the new column")
+        elif event.kind == "trigger" and d["added"]:
+            ui.success("Added the sync trigger")
+        elif event.kind == "start":
+            ui.note(f"  {d['pending']:,} rows need a new vector")
+            self.progress.start()
+            self.task = self.progress.add_task("Embedding", total=d["pending"], rate="", cost="")
+        elif event.kind == "batch" and self.task is not None:
+            self.done = d["rows_written"]
+            rate = self.done / max(time.monotonic() - self.started, 1e-6)
+            cost = _money(d["spent_usd"]) if d["spent_usd"] is not None else ""
+            self.progress.update(
+                self.task, completed=self.done, rate=f"{rate:,.0f} rows/s", cost=cost
+            )
+        elif event.kind == "pass" and d["number"] > 1 and self.task is not None:
+            self.progress.update(
+                self.task, description="Catching up", total=self.done + d["remaining"]
+            )
+        elif event.kind == "index":
+            self.close()
+            if d["state"] == "building":
+                self.status = ui.console.status(
+                    f"Building the {d['method']} index concurrently. Writes continue…",
+                    spinner="dots",
+                    spinner_style=ui.ACCENT,
+                )
+                self.status.start()
+            else:
+                ui.success(f"Index {d['state']}")
+        elif event.kind == "done":
+            self.close()
+
+    def close(self) -> None:
+        if self.task is not None:
+            self.progress.stop()
+            self.task = None
+        if self.status is not None:
+            self.status.stop()
+            self.status = None
+
+
 def _eta(seconds: float) -> str:
     if seconds < 90:
         return f"{max(1, round(seconds))} s"
@@ -91,7 +167,44 @@ def _eta(seconds: float) -> str:
     return f"{seconds / 3600:.1f} h"
 
 
+def _summary_fancy(result: ApplyResult) -> None:
+    from vecshift import ui
+
+    kind = {"complete": "ok", "failed": "error"}.get(result.status, "warn")
+    ui.verdict(f"Apply {result.status}.", kind)
+    if result.message:
+        ui.detail(result.message)
+    spent = _money(result.spent_usd) if result.spent_usd is not None else "unknown"
+    total = _money(result.total_spent_usd) if result.total_spent_usd is not None else ""
+    ui.console.print()
+    ui.kv(
+        [
+            ("Rows written", f"{result.rows_written:,}", ""),
+            ("Tokens", f"{result.tokens:,}", ""),
+            ("Spent", spent, f"{total} across runs" if total else ""),
+            ("Time", f"{result.seconds:,.0f} s", ""),
+        ]
+        + (
+            [("Rejected", f"{result.rows_failed:,} rows", "retried on the next run")]
+            if result.rows_failed
+            else []
+        )
+    )
+    if result.status == "complete":
+        ui.next_step(
+            "check it's safe to switch with vecshift cutover --check, then run vecshift "
+            "cutover. It embeds rows added or edited since this run first."
+        )
+    elif result.status in {"stopped", "budget"}:
+        ui.next_step("run vecshift apply again to continue where it stopped.")
+
+
 def _summary(result: ApplyResult) -> None:
+    from vecshift import ui
+
+    if ui.fancy():
+        _summary_fancy(result)
+        return
     color = {"complete": typer.colors.GREEN, "failed": typer.colors.RED}.get(
         result.status, typer.colors.YELLOW
     )
@@ -169,7 +282,39 @@ def apply(
     state = JobState.for_job(job_file, job.name)
     est = plan.estimates
     warnings = [f for f in plan.findings if f.severity.rank == 2]
-    if not output_json:
+    from vecshift import ui
+
+    fancy = ui.fancy() and not output_json
+    if fancy:
+        from rich.text import Text
+
+        from vecshift.cli_plan import CHANGE_MARKS
+
+        ui.title("apply", job.name)
+        for change in plan.changes:
+            if change.kind != "cutover":
+                mark, colour = CHANGE_MARKS.get(change.kind, ("·", "dim"))
+                ui.console.print(Text.assemble((f"  {mark} ", f"bold {colour}"), change.summary))
+        ui.console.print()
+        rows: list[tuple[str, str, str]] = [
+            ("Estimated cost", _money(est.cost_usd), ""),
+            ("New column", _size(est.new_bytes), ""),
+        ]
+        if job.limits.budget_usd:
+            rows.append(("Budget", f"${job.limits.budget_usd:,.2f}", "apply stops there"))
+        if state.runs:
+            rows.append(
+                (
+                    "Resuming",
+                    f"{state.rows_written:,} rows",
+                    f"written in earlier runs, {_money(state.spent_usd)} spent",
+                )
+            )
+        ui.kv(rows)
+        if warnings:
+            ui.console.print()
+            ui.findings(warnings)
+    elif not output_json:
         typer.secho(f"vecshift apply · {job.name}", bold=True)
         for change in plan.changes:
             if change.kind != "cutover":
@@ -184,7 +329,14 @@ def apply(
             )
         if warnings:
             finding_lines(warnings)
-    if not yes:
+    if not yes and fancy:
+        where = "your machine" if spec.is_local else spec.url
+        ui.console.print()
+        ui.note(f"  This changes {plan.source.split()[0]} and sends row text to {where}.")
+        if not ui.confirm("Apply?", default=False):
+            raise typer.Exit(1)
+        ui.console.print()
+    elif not yes:
         where = "your machine" if spec.is_local else spec.url
         typer.echo(
             f"\nThis changes {plan.source.split()[0]} and sends row text to {where}.",
@@ -221,6 +373,8 @@ def apply(
         def on_event(event: Event) -> None:
             typer.echo(json.dumps({"event": event.kind, **event.data}))
 
+    elif fancy:
+        on_event = _FancyProgress()
     else:
         on_event = _Progress(live=sys.stdout.isatty())
     try:
@@ -255,6 +409,8 @@ def apply(
             )
         raise _fail(f"The database reported an error: {detail}", hint) from exc
     finally:
+        if isinstance(on_event, _FancyProgress):
+            on_event.close()
         signal.signal(signal.SIGINT, previous)
         conn.close()
 

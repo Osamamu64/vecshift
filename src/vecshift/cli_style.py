@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import os
 import shutil
-import sys
 import textwrap
 from collections.abc import Sequence
 
@@ -22,33 +20,6 @@ STYLE = {
 
 INDENT = " " * 11
 
-# The logo's mark: points moving from the old embedding space (grey) into the new (blue).
-MARK = (
-    ("·", (169, 168, 161)),
-    ("•", (131, 154, 181)),
-    ("●", (91, 139, 199)),
-    ("●", (42, 120, 214)),
-)
-
-
-def fancy() -> bool:
-    """Whether to draw decoration: only for a person at a terminal that wants colour."""
-    return sys.stdout.isatty() and "NO_COLOR" not in os.environ and os.environ.get("TERM") != "dumb"
-
-
-def banner(version: str, tagline: str | None = None) -> None:
-    """The logo as text, for the start of interactive commands. Plain output stays plain."""
-    if not fancy():
-        return
-    for glyph, rgb in MARK:
-        typer.secho(glyph, fg=rgb, bold=True, nl=False)
-        typer.echo(" ", nl=False)
-    typer.secho(" vecshift", bold=True, nl=False)
-    typer.secho(f" {version}", dim=True)
-    if tagline:
-        typer.secho(f"{' ' * 9}{tagline}", dim=True)
-    typer.echo()
-
 
 def wrap(text: str) -> str:
     width = min(100, shutil.get_terminal_size((100, 24)).columns)
@@ -57,6 +28,11 @@ def wrap(text: str) -> str:
 
 def finding_lines(findings: Sequence[Finding]) -> None:
     """Print findings, most severe first, in the doctor style."""
+    from vecshift import ui
+
+    if ui.fancy():
+        ui.findings(findings)
+        return
     for finding in sorted(findings, key=lambda f: -f.severity.rank):
         label, color, _ = STYLE[finding.severity]
         typer.secho(f"{label}  ", fg=color, bold=True, nl=False)
