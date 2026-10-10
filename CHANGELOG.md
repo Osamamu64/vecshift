@@ -7,6 +7,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-10
+
 ### Added
 
 - `vecshift init` guides you at a terminal: it asks for the connection string (hidden),
@@ -18,7 +20,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `vecshift status` shows where a migration stands and what to run next (`--json` too).
 - Running `vecshift` alone, and `vecshift init`, show the logo at a colour terminal.
 
-## [0.1.0]
+## [0.1.0] - 2026-10-10
 
 The first release.
 
@@ -147,5 +149,6 @@ The first release.
 - `Capability` flags and plugin contracts for sources, targets, and embedding providers.
 - `vecshift fingerprint` and `vecshift --version` commands.
 
-[Unreleased]: https://github.com/Osamamu64/vecshift/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Osamamu64/vecshift/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/Osamamu64/vecshift/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Osamamu64/vecshift/releases/tag/v0.1.0
