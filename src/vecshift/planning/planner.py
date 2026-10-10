@@ -409,7 +409,8 @@ def build_plan(
                 f"maintenance_work_mem is {_size(target.maintenance_work_mem)}. pgvector builds "
                 "much more slowly once the graph no longer fits.",
                 hint=f"Raise it for the build, e.g. SET maintenance_work_mem = '{need}', if "
-                "the server has the memory to spare.",
+                "the server has the memory to spare. In Docker, also give the container that "
+                "much shared memory (--shm-size), which parallel builds use.",
             )
         )
 

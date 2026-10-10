@@ -246,10 +246,14 @@ def apply(
         raise _fail(f"{exc}", "Progress is saved; run apply again to continue.") from exc
     except psycopg.Error as exc:
         detail = str(exc).strip().splitlines()[0] if str(exc).strip() else type(exc).__name__
-        raise _fail(
-            f"The database reported an error: {detail}",
-            "Every finished batch is saved; run apply again to continue.",
-        ) from exc
+        hint = "Every finished batch is saved; run apply again to continue."
+        if "shared memory segment" in detail:
+            hint = (
+                "The parallel index build ran out of shared memory, sized by "
+                "maintenance_work_mem. In Docker, /dev/shm is 64 MB unless the container "
+                "runs with --shm-size (e.g. 2g); or lower maintenance_work_mem. " + hint
+            )
+        raise _fail(f"The database reported an error: {detail}", hint) from exc
     finally:
         signal.signal(signal.SIGINT, previous)
         conn.close()
