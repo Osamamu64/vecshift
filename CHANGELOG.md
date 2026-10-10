@@ -25,6 +25,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- On tables with constant writes, `apply` never finished (a few rows always changed during
+  each catch-up pass, so it stopped without building the index) and `cutover` could never
+  pass its final check. `apply` now finishes once at most 0.1% of rows (at least 100) are
+  left, counting them after the index build; each pass covers only what was pending when it
+  began; and `cutover` embeds up to 500 late rows while it holds the write lock.
+- `eval` treated a busy table's few waiting rows as a partial migration and skipped latency.
+- `eval`'s index recall now counts ties: a row exactly as close as the exact 10th result is
+  a correct answer. Tables with near-duplicate rows read far too low before.
+- Schema changes wait at most 2 seconds (was 5) for a lock, which bounds how long
+  application writes can queue behind them.
+- `apply` explains `could not resize shared memory segment` during the index build
+  (Docker's default 64 MB `/dev/shm`), and `plan`'s memory hint mentions `--shm-size`.
+- `plan` described cutover with the wrong column name (`_previous`; it's `_old`).
+
 - `plan` (and so `apply`) and `cutover --check` refuse a table whose row-level security binds
   the connecting role, such as one with `FORCE ROW LEVEL SECURITY`. `apply` used to report
   success while skipping the rows the role couldn't see.

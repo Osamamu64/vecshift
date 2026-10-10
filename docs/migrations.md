@@ -179,8 +179,10 @@ retried on the next run after the others.
 
 ### Locks and concurrency
 
-- Schema changes wait at most 5 seconds for their lock, then back off and retry, instead
-  of queueing behind your application's queries and blocking them.
+- Schema changes wait at most 2 seconds for their lock, then back off and retry, instead
+  of queueing behind your application's queries and blocking them. While one waits, new
+  writes queue behind it, so a write can pause for up to that long. If autovacuum holds the
+  table, PostgreSQL cancels it after `deadlock_timeout` (1 second by default).
 - Statements run under timeouts. Only the concurrent index build runs without one.
 - A session advisory lock keeps two `apply` runs off the same column at once.
 - Because of that lock and the concurrent index build, `apply` needs a real session: on
@@ -211,6 +213,38 @@ Table owners bypass row-level security, so `apply` reaches every row. If the tab
 see while reporting success, so `plan` refuses. Connect as a role with `BYPASSRLS` (or a
 superuser), or turn off `FORCE ROW LEVEL SECURITY` for the migration. Revoke any membership
 or attribute you granted once the migration is done.
+
+## At scale
+
+The whole workflow was run against a 2-million-row table (1.6 GB, with an HNSW index on the
+old vectors) on 4 vCPUs and 15 GB of RAM, with PostgreSQL 17's default settings apart from
+`maintenance_work_mem = 1GB`. A simulated application updated and inserted rows about 14
+times a second throughout.
+
+| Step | Time | Application writes meanwhile |
+|---|---|---|
+| `plan` | under 1 s | — |
+| `apply`: embed 2.04 million rows | 55 min, set by the local test model (~620 rows/s) | 60,381 writes, p99 36 ms, no errors |
+| `apply` again: catch up, build the HNSW index | 4.6 min | p99 33 ms, no errors |
+| `cutover --check` | 1.3 s | — |
+| `cutover`, embedding 5,521 rows changed during the index build | 30 s | longest pause 0.29 s |
+| `rollback` | 1.7 s | longest pause 0.99 s (see below) |
+| `eval`, 200 queries | 29 s | p99 13 ms |
+
+What this showed, and what changed because of it:
+
+- On a busy table a few rows always change while a pass runs. `apply` now finishes once no
+  more than 0.1% of rows (at least 100) are left after its catch-up passes, and says how
+  many; `cutover` embeds them first, and embeds any that arrive after that while it holds
+  the write lock, so it doesn't chase new rows forever.
+- The longest write pauses (about 1 second) came from a schema change waiting for
+  autovacuum, which PostgreSQL cancels after `deadlock_timeout`. Schema changes now wait at
+  most 2 seconds for a lock before backing off.
+- The HNSW build failed at first with `could not resize shared memory segment`: parallel
+  builds share memory sized by `maintenance_work_mem`, and Docker gives containers 64 MB of
+  `/dev/shm` unless started with `--shm-size`. `apply` now explains this when it happens.
+- Embedding speed depends on your provider and its rate limits, not on vecshift: budget
+  the backfill from `plan`'s estimate, and use `--until` to do it in stages.
 
 ## Cutting over
 

@@ -176,16 +176,16 @@ class FakeSearcher:
 
     def search(
         self, side: str, vector: Sequence[float], k: int, setting: int | None = None
-    ) -> list[str]:
+    ) -> list[tuple[str, float]]:
         self.calls.append(("search", side, setting))
-        ranked = self._rank(vector)[:k]
+        hits = [(key, float(i)) for i, key in enumerate(self._rank(vector)[:k])]
         if setting == 40:  # a low setting misses the 10th result
-            ranked = [*ranked[:9], "miss"]
-        return ranked
+            hits = [*hits[:9], ("miss", 99.0)]
+        return hits
 
-    def exact(self, side: str, vector: Sequence[float], k: int) -> list[str]:
+    def exact(self, side: str, vector: Sequence[float], k: int) -> list[tuple[str, float]]:
         self.calls.append(("exact", side, None))
-        return self._rank(vector)[:k]
+        return [(key, float(i)) for i, key in enumerate(self._rank(vector)[:k])]
 
     def index(self, side: str) -> tuple[str | None, int | None, list[int]]:
         return ("hnsw", 40, [40, 100])
@@ -260,3 +260,14 @@ def test_partial_migration_searches_exactly() -> None:
     assert not result.new.sweep and not result.old.sweep, "no latency on a partial migration"
     assert {c[0] for c in searcher.calls} == {"exact"}
     assert any("isn't finished" in n for n in result.notes)
+
+
+def test_index_recall_counts_ties() -> None:
+    from vecshift.eval.runner import index_recall
+
+    exact = [[("a", 0.1), ("b", 0.2), ("c", 0.3)]]
+    tied = [[("a", 0.1), ("b", 0.2), ("z", 0.3)]]  # a different row, just as close
+    farther = [[("a", 0.1), ("b", 0.2), ("y", 0.4)]]
+    assert index_recall(tied, exact) == 1.0
+    assert index_recall(farther, exact) == pytest.approx(2 / 3)
+    assert index_recall([[]], [[]]) == 1.0 and index_recall([], []) == 1.0
