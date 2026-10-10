@@ -224,7 +224,7 @@ times a second throughout.
 | Step | Time | Application writes meanwhile |
 |---|---|---|
 | `plan` | under 1 s | — |
-| `apply`: embed 2.04 million rows | 55 min, set by the local test model (~620 rows/s) | 60,381 writes, p99 36 ms, no errors |
+| `apply`: embed 2.04 million rows | depends on your embedding model and its rate limits | 60,381 writes, p99 36 ms, no errors |
 | `apply` again: catch up, build the HNSW index | 4.6 min | p99 33 ms, no errors |
 | `cutover --check` | 1.3 s | — |
 | `cutover`, embedding 5,521 rows changed during the index build | 30 s | longest pause 0.29 s |
