@@ -321,7 +321,9 @@ def test_qdrant_plan_happy_path() -> None:
 
 def test_qdrant_plan_problems() -> None:
     assert found(qplan(s=state(other_vectors=("title",))))["plan.other_vectors"] is Severity.ERROR
-    assert found(qplan(s=state(collection="docs_v1")))["plan.target_is_source"] is Severity.ERROR
+    direct = state(collection="docs_v1", alias=None, alias_target=None, source_is_alias=False)
+    assert found(qplan(s=direct))["plan.target_is_source"] is Severity.ERROR
+    assert found(qplan(s=state(collection="docs_v1")))["plan.cut_over"] is Severity.ERROR
     assert found(qplan(s=state(alias_target="docs_v2")))["plan.cut_over"] is Severity.ERROR
     conflict = state(exists=True, dimensions=3, distance="Dot")
     assert found(qplan(s=conflict))["plan.collection_conflict"] is Severity.ERROR

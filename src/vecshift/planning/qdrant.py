@@ -118,7 +118,18 @@ def build_qdrant_plan(
         )
 
     # --- The new collection and the alias.
-    if target.live is not None and target.collection == target.live:
+    if target.alias is not None and target.alias_target == target.collection:
+        findings.append(
+            Finding(
+                "plan.cut_over",
+                Severity.ERROR,
+                "Already cut over",
+                f"The alias `{target.alias}` already points at `{target.collection}`.",
+                hint="If you've cut over, pick a new target.collection to start another "
+                "migration; otherwise target.collection names the collection in use.",
+            )
+        )
+    elif target.live is not None and target.collection == target.live:
         findings.append(
             Finding(
                 "plan.target_is_source",
@@ -126,16 +137,6 @@ def build_qdrant_plan(
                 "The new collection is the current one",
                 f"`{target.collection}` already holds the vectors being replaced.",
                 hint="Set target.collection to a new name.",
-            )
-        )
-    elif target.alias is not None and target.alias_target == target.collection:
-        findings.append(
-            Finding(
-                "plan.cut_over",
-                Severity.ERROR,
-                "Already cut over",
-                f"The alias `{target.alias}` already points at `{target.collection}`.",
-                hint="Pick a new target.collection to start another migration.",
             )
         )
     elif target.exists:

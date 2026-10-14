@@ -165,6 +165,7 @@ class QdrantWriter:
         self._sleep = sleep
         self.read_only = read_only
         self._lock: IO[str] | None = None
+        self._depth = 0
         self.payloads_copied = 0
         """Points whose payload changed in the source and was copied without re-embedding."""
 
@@ -174,8 +175,10 @@ class QdrantWriter:
         """Make sure no other apply runs this job from the same directory at the same time.
 
         Qdrant has no locks, so this guards against a second run on this machine only.
+        Taking it again from the same writer (cutover's catch-up) just nests.
         """
-        if self.lock_path is None:
+        self._depth += 1
+        if self.lock_path is None or self._lock is not None:
             return
         try:
             import fcntl
@@ -187,13 +190,15 @@ class QdrantWriter:
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError as exc:
             handle.close()
+            self._depth -= 1
             raise AlreadyRunning(
                 f"Another vecshift apply is already filling {self.layout.collection}."
             ) from exc
         self._lock = handle
 
     def release(self) -> None:
-        if self._lock is not None:
+        self._depth = max(0, self._depth - 1)
+        if self._lock is not None and self._depth == 0:
             self._lock.close()
             self._lock = None
 

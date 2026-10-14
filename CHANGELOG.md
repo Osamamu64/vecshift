@@ -21,6 +21,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   model's vectors, and on later runs re-embeds edited points, copies payload-only edits,
   and removes deleted points. The source is only read, a pgvector source on a read-only
   connection. Existing job files keep working unchanged.
+- `cutover`, `rollback`, `cleanup`, and `eval` for migrations into Qdrant. Cutover catches
+  up with the source, then points the alias at the new collection in one atomic request,
+  and reports writes that reached the old collection too late. Rollback points it back and
+  counts points written since; cleanup deletes the old collection after you type its
+  name. `eval` searches both sides as the application does, sweeping Qdrant's `hnsw_ef`,
+  including a pgvector column against its new Qdrant collection.
 - `plan --json` includes `store`, where the new vectors go.
 
 ### Changed

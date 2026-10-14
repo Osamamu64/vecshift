@@ -45,8 +45,8 @@ VecShift answers those first, then makes the migration itself safe and repeatabl
 | `vecshift bench` | Compare embedding models on a sample of *your* data: recall, latency, cost, storage | ✅ Available |
 | `vecshift init` / `plan` | Write a migration job, then check it and estimate tokens, cost, time, and storage | ✅ Available |
 | `vecshift apply` | Re-embed into a side-by-side column or collection with resume, a spend cap, live-write sync, and a concurrent index build | ✅ pgvector, Supabase, and Qdrant, plus pgvector → Qdrant |
-| `vecshift eval` | Compare old and new vectors on your data, per language, with latency vs accuracy, and a go/no-go verdict | ✅ pgvector and Supabase |
-| `vecshift cutover` / `rollback` | Switch searches to the new vectors under the same name, with instant rollback | ✅ pgvector and Supabase |
+| `vecshift eval` | Compare old and new vectors on your data, per language, with latency vs accuracy, and a go/no-go verdict | ✅ pgvector, Supabase, and Qdrant |
+| `vecshift cutover` / `rollback` | Switch searches to the new vectors under the same name (or alias), with instant rollback | ✅ pgvector, Supabase, and Qdrant |
 
 Initial targets are **pgvector** and **Qdrant**, with an **OpenAI-compatible** embedding
 provider (which covers OpenAI, vLLM, Ollama, TEI, and most hosted inference) plus a free

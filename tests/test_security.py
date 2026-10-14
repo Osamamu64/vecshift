@@ -465,3 +465,20 @@ def test_workflow_actions_are_pinned_to_commits() -> None:
                 action, comment = match.groups()
                 assert re.search(r"@[0-9a-f]{40}$", action), f"{workflow.name}: {action}"
                 assert re.match(r"\s*# v\d", comment), f"{workflow.name}: {action} needs # vX"
+
+
+def test_qdrant_switches_ask_first() -> None:
+    """Cutover and rollback for Qdrant need a person (or --yes) before they move an alias;
+    cleanup needs the old collection's name typed before it deletes it. eval's Qdrant
+    searches only read."""
+    import vecshift.cli_qdrant as cli_qdrant
+    import vecshift.connectors.qdrant.search as search
+
+    text = Path(cli_qdrant.__file__).read_text(encoding="utf-8")
+    assert text.count("_confirm(") == 2, "cutover and rollback both ask"
+    assert "typed != previous" in text and "Not deleting anything without confirmation" in text
+    assert text.index("_confirm(") < text.index("switch.point(")
+    assert text.index("typed != previous") < text.index("delete_collection(")
+    searches = Path(search.__file__).read_text(encoding="utf-8")
+    for write in ("upsert", "batch", "delete", "update_aliases", "create_"):
+        assert write not in searches
