@@ -62,6 +62,19 @@ Each test creates and drops its own database, laid out like Supabase (pgvector i
 `extensions` schema), and its own Qdrant collections. CI runs them against PostgreSQL 16
 and 17, with Qdrant 1.19.
 
+### JSON contracts
+
+The `--json` output of every command is pinned in `tests/contracts/`: the keys and value
+types, not the values ([docs/json.md](docs/json.md) says what they mean). If you add a
+field, the contract tests fail until you update the contracts:
+
+```bash
+VECSHIFT_UPDATE_CONTRACTS=1 uv run pytest tests/integration/test_json_contracts.py
+```
+
+Review the diff and commit it with your change. Adding a field is fine; removing,
+renaming, or retyping one is a breaking change and needs a changelog entry saying so.
+
 ## Project layout
 
 ```

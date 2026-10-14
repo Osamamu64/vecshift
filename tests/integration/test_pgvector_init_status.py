@@ -37,6 +37,7 @@ def test_guided_init(
     params = conninfo_to_dict(db_dsn)
     wrong = make_conninfo("", **{**params, "password": "not-the-password"})
     answers = [
+        "",  # a pgvector column, the default
         wrong,  # rejected, asked again
         db_dsn,
         "",  # the model that made the current vectors: skipped
@@ -83,6 +84,7 @@ def test_guided_init_can_leave_secrets_unsaved(
     monkeypatch.setenv("OPENAI_API_KEY", "placeholder")
     monkeypatch.delenv("OPENAI_API_KEY")
     answers = [
+        "1",  # a pgvector column
         db_dsn,
         "hash/64",  # the old model, for eval
         "1",  # openai/text-embedding-3-small

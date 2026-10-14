@@ -388,6 +388,7 @@ def test_secrets_typed_into_init_are_hidden_and_saved_only_on_request() -> None:
 
     source = Path(cli_init.__file__).read_text(encoding="utf-8")
     assert 'ui.secret("Connection string")' in source
+    assert 'ui.secret("Qdrant API key")' in source
     key_prompt = source[source.index("def _model_key") :]
     assert "ui.secret(" in key_prompt and "typer.prompt(" not in source
     # Saving asks first, and defaults to no.

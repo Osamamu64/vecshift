@@ -39,7 +39,9 @@ by one model can't be compared with vectors from another.
 ## The job file
 
 `vecshift init` writes a commented `vecshift.yaml`. Run it at a terminal without flags and
-it asks for what it needs:
+it asks what to migrate (a pgvector column into a new column, a Qdrant collection into a
+new collection, or a pgvector table into Qdrant; see
+[Qdrant](connectors/qdrant.md#setting-up-a-job) for the last two), then for what it needs:
 
 1. The connection string, unless `VECSHIFT_DSN` or `DATABASE_URL` is already set. It's
    hidden as you type, checked by connecting, and asked again if it doesn't work.
@@ -49,8 +51,8 @@ it asks for what it needs:
 
 It then offers to save the connection string, and any API key the model needs, to `.env`
 (see below), and to run `plan`. Saving defaults to no: nothing is written to disk unless
-you say yes. With `--table` and `--model`, `init` asks nothing, for scripts; and
-without a terminal it requires them.
+you say yes. With `--table` (or `--collection` for Qdrant) and `--model`,
+`init` asks nothing, for scripts; and without a terminal it requires them.
 
 The full set of settings:
 
