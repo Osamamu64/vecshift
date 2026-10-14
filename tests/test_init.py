@@ -133,17 +133,22 @@ def test_guided_qdrant_through_an_alias(fake: KeyedQdrant, tmp_path: Path) -> No
     assert spec.source.type == "qdrant" and spec.source.collection == "docs"
     assert spec.source.text_field == "page_content" and spec.model == "hash/256"
     assert spec.qdrant_target.alias is None and spec.target_collection == "docs_v2"
+    writes = [r for r in fake.requests if r.method != "GET" and not r.url.path.endswith("/scroll")]
+    assert writes == [], "init only reads from Qdrant"
 
 
 def test_guided_qdrant_without_an_alias(fake: KeyedQdrant, tmp_path: Path) -> None:
     fake.add("docs", {"size": 2, "distance": "Cosine"}, points(5, "body"))
     fake.add("docs_live_v2", {"size": 2, "distance": "Cosine"}, [])
+    fake.add("products", {"size": 2, "distance": "Cosine"}, [])
+    fake.aliases.append(("shop", "products"))
     result = guided(
         [
             "",  # --to qdrant leaves two routes: Enter picks a Qdrant collection
             "",  # the URL
             "",  # which vectors: docs, the first
             "docs",  # an alias can't take a collection's name: asked again
+            "shop",  # nor another collection's alias, which cutover would move
             "docs_live",  # the alias cutover creates
             "",  # docs_live_v2 is taken: the suggested docs_live_v2_2
             "",  # the text field: body, detected
@@ -157,6 +162,7 @@ def test_guided_qdrant_without_an_alias(fake: KeyedQdrant, tmp_path: Path) -> No
     assert result.exit_code == 0, result.output
     assert "searches docs by name" in result.output
     assert "docs is already a collection's name" in result.output
+    assert "shop is already an alias, for products" in result.output
     assert "docs_live_v2 already exists" in result.output
     spec = job(tmp_path / "vecshift.yaml")
     assert spec.source.type == "qdrant" and spec.source.collection == "docs"

@@ -515,7 +515,8 @@ def _free(base: str, taken: set[str]) -> str:
     return name
 
 
-def _name_problem(collections: set[str], aliases: set[str]) -> Callable[[str], str | None]:
+def _name_problem(collections: set[str], aliases: dict[str, str]) -> Callable[[str], str | None]:
+    """Checks a name for a new alias or collection: it must not be taken."""
     from vecshift.jobs.spec import _COLLECTION
 
     def check(value: str) -> str | None:
@@ -524,7 +525,11 @@ def _name_problem(collections: set[str], aliases: set[str]) -> Callable[[str], s
         if value in collections:
             return f"{value} is already a collection's name."
         if value in aliases:
-            return f"{value} is already an alias."
+            # Cutover would move it, taking searches away from whatever it names now.
+            return (
+                f"{value} is already an alias, for {aliases[value]}. Pick a new name; to "
+                "move that alias at cutover, set target.alias in the job file instead."
+            )
         return None
 
     return check
@@ -598,11 +603,9 @@ def _qdrant_vectors(
             f"Your application searches {field.collection} by name, so there's no alias "
             "for cutover to move."
         )
-        answers.alias = _ask_alias(
-            alias, f"{field.collection}_live", set(collections), {a for a, _ in pairs}
-        )
+        answers.alias = _ask_alias(alias, f"{field.collection}_live", set(collections), dict(pairs))
     answers.new_collection = _new_collection(
-        f"{answers.alias or searched}_v2", set(collections), {a for a, _ in pairs}
+        f"{answers.alias or searched}_v2", set(collections), dict(pairs)
     )
     answers.text_column = _qdrant_text(client, field)
 
@@ -611,10 +614,10 @@ def _ask_alias(
     alias: str | None,
     suggestion: str,
     collections: set[str],
-    aliases: set[str],
+    aliases: dict[str, str],
 ) -> str:
-    """The alias cutover will create: from --alias, or asked."""
-    check = _name_problem(collections, set())
+    """The alias cutover will create: from --alias, or asked. It must be a new name."""
+    check = _name_problem(collections, aliases)
     if alias:
         problem = check(alias)
         if problem:
@@ -626,18 +629,18 @@ def _ask_alias(
         "collection."
     )
     return ui.text(
-        "Name for the alias", default=_free(suggestion, collections | aliases), validate=check
+        "Name for the alias", default=_free(suggestion, collections | set(aliases)), validate=check
     )
 
 
-def _new_collection(default: str, collections: set[str], aliases: set[str]) -> str | None:
+def _new_collection(default: str, collections: set[str], aliases: dict[str, str]) -> str | None:
     """None to keep the default name for the new collection, or another when it's taken."""
     if default not in collections and default not in aliases:
         return None
     ui.warn(f"A collection or alias named {default} already exists.")
     return ui.text(
         "Name for the new collection",
-        default=_free(default, collections | aliases),
+        default=_free(default, collections | set(aliases)),
         validate=_name_problem(collections, aliases),
     )
 
@@ -689,7 +692,7 @@ def _qdrant_text(client: QdrantClient, field: VectorField) -> str:
 def _into_qdrant(client: QdrantClient, table: str, alias: str | None, answers: _Answers) -> None:
     """The alias and collection a pgvector table is copied into."""
     collections = set(client.collections())
-    aliases = {a for a, _ in client.aliases()}
+    aliases = dict(client.aliases())
     answers.alias = _ask_alias(alias, table, collections, aliases)
     answers.new_collection = _new_collection(f"{answers.alias}_v2", collections, aliases)
 
