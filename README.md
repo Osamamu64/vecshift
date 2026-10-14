@@ -193,6 +193,28 @@ already uses, in one transaction. Switch the model your app embeds queries with 
 same time. See [Running a migration](docs/migrations.md) and
 [Evaluating a migration](docs/eval.md).
 
+### Migrate into Qdrant
+
+The same commands work for Qdrant, re-embedding a collection or moving a pgvector table
+into Qdrant. `apply` fills a new collection with the source's payloads and new vectors,
+and `cutover` points your application's alias at it in one atomic step:
+
+```yaml
+# vecshift.yaml
+source:
+  type: qdrant
+  collection: documents        # the alias your application searches
+model: openai/text-embedding-3-large,dims=1024
+```
+
+```bash
+export VECSHIFT_QDRANT_URL=https://xyz.cloud.qdrant.io:6333 QDRANT_API_KEY=...
+vecshift plan && vecshift apply && vecshift eval && vecshift cutover
+```
+
+For a pgvector table, keep `source: {table: ...}` and set `target: {type: qdrant, alias:
+documents}`. See [Migrating into Qdrant](docs/connectors/qdrant.md#migrating-into-qdrant).
+
 #### Tested at scale
 
 The full workflow has been run on a **2-million-row** table (PostgreSQL 17, 4 vCPUs, 15 GB

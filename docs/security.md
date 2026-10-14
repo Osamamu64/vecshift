@@ -61,6 +61,8 @@ and how it protects credentials. To report a vulnerability, see
 - `apply` only adds things: a column, a trigger and its function, and an index. Its row
   writes touch only the new column. `cutover` and `rollback` only rename columns and
   indexes and move the trigger; no vectors are deleted until `cleanup`.
+- A **pgvector source of a migration into Qdrant** is only read, on a read-only
+  connection, one short read-only transaction at a time.
 - vecshift's trigger functions pin their `search_path`, so objects in other schemas can't
   change what they do.
 - Schema changes wait at most a few seconds for a lock and then back off, so `apply` never
@@ -77,6 +79,19 @@ and how it protects credentials. To report a vulnerability, see
   recipe. `apply` needs to own the table; see
   [Permissions](migrations.md#permissions).
 
+## Qdrant
+
+- `doctor`, `bench`, `plan`, `status`, and `eval` only read.
+- `apply` writes only to the new collection, and only to one the job created itself, as
+  recorded in its state file. It never fills, overwrites, or deletes points in a
+  collection it didn't make, and never writes to the source collection.
+- `cutover` and `rollback` only move an alias, in one atomic request, after asking (or
+  `--yes`). `cleanup` is the only command that deletes a collection: it asks you to type
+  the name, refuses while an alias points at it, and only deletes the collection named in
+  this job's own cutover record.
+- Collection and alias names are checked against Qdrant's naming rules and quoted in every
+  URL.
+
 ## Data kept on disk
 
 - **Embedding cache**: `~/.cache/vecshift/embeddings.sqlite` (or under `$XDG_CACHE_HOME`).
@@ -86,7 +101,8 @@ and how it protects credentials. To report a vulnerability, see
   the directory to clear it, or pass `--no-cache`.
 - **Migration state**: `.vecshift/<job>.state.json` next to the job file holds spend,
   token and row counts, and the IDs of rows the provider rejected, with the provider's
-  error. Never row text or credentials. The directory is `0700` and the file `0600`, and
+  error, the Qdrant collections the job created, and its cutovers and rollbacks (event,
+  time, and names). Never row text or credentials. The directory is `0700` and the file `0600`, and
   it is replaced atomically so a crash can't leave it half-written.
 - **`.env`**: only when you choose to save to it in `vecshift init`, as above.
 - **Files you ask for**: reports and saved queries are written only where you point them.
