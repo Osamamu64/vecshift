@@ -55,6 +55,8 @@ class Plan:
     vector_type: str
     metric: str = "cosine"
     """Distance for the new index: the job's, the current index's, or cosine."""
+    store: str = "pgvector"
+    """Where the new vectors go: ``pgvector`` (a new column) or ``qdrant`` (a new collection)."""
     changes: list[Change] = field(default_factory=list)
     estimates: Estimates = field(default_factory=Estimates)
     findings: list[Finding] = field(default_factory=list)
@@ -75,6 +77,7 @@ class Plan:
             "job": self.job,
             "ok": self.ok,
             "source": self.source,
+            "store": self.store,
             "target_column": self.target_column,
             "model": self.model,
             "dimensions": self.dimensions,

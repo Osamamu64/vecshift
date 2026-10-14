@@ -222,6 +222,8 @@ def test_apply_asks_before_changing_anything(monkeypatch: pytest.MonkeyPatch) ->
         profile=SimpleNamespace(text_field="content"),
     )
     monkeypatch.setattr(cli_apply, "prepare", lambda job_file: ready)
+    pg_job = SimpleNamespace(target=SimpleNamespace(type="pgvector"))
+    monkeypatch.setattr(cli_apply, "read_job", lambda job_file: pg_job)
 
     def connect(settings: object) -> None:
         raise AssertionError("connected without confirmation")
@@ -317,12 +319,66 @@ def test_eval_only_reads() -> None:
 
 
 def test_status_only_reads() -> None:
-    """status connects read-only, like eval, and never saves job state."""
+    """status connects read-only, like eval, and never saves job state. For a migration into
+    Qdrant it counts without copying payloads."""
     import vecshift.cli_status as cli_status
 
     source = Path(cli_status.__file__).read_text(encoding="utf-8")
     assert "pgvector.connect(settings)" in source and "connect_writer" not in source
     assert ".save(" not in source
+    assert "read_only=True" in source and "remove_deleted" not in source
+
+
+def test_qdrant_sources_are_only_read() -> None:
+    """A migration into Qdrant reads its source table on a read-only connection, one short
+    read-only transaction at a time, and writes nothing but the new collection."""
+    import inspect
+
+    import vecshift.cli_apply as cli_apply
+    import vecshift.connectors.pgvector.reader as reader
+    from vecshift.connectors.pgvector import connect_reader
+
+    assert "connect_reader(ready.source_pg)" in Path(cli_apply.__file__).read_text("utf-8")
+    text = Path(reader.__file__).read_text(encoding="utf-8")
+    assert "SET TRANSACTION READ ONLY" in text
+    for verb in ("INSERT", "UPDATE", "DELETE", "ALTER", "CREATE"):
+        assert verb not in text
+    assert "conn.read_only = True" in inspect.getsource(connect_reader)
+
+
+def test_apply_asks_before_creating_a_qdrant_collection(monkeypatch: pytest.MonkeyPatch) -> None:
+    from types import SimpleNamespace
+
+    import vecshift.cli_apply as cli_apply
+    from vecshift.connectors import qdrant
+    from vecshift.planning.plan import Estimates
+
+    ready = SimpleNamespace(
+        plan=SimpleNamespace(
+            ok=True,
+            dimensions=8,
+            findings=[],
+            changes=[],
+            estimates=Estimates(),
+            source="docs",
+            target_column="docs_v2",
+            metric="cosine",
+        ),
+        job=SimpleNamespace(name="docs", limits=SimpleNamespace(budget_usd=None)),
+        spec=SimpleNamespace(price=None, is_local=False, url="https://api.example.com/v1"),
+    )
+    q_job = SimpleNamespace(target=SimpleNamespace(type="qdrant"))
+    monkeypatch.setattr(cli_apply, "read_job", lambda job_file: q_job)
+    monkeypatch.setattr(cli_apply, "prepare_qdrant", lambda job_file: ready)
+
+    def connect(*args: object, **kwargs: object) -> None:
+        raise AssertionError("connected without confirmation")
+
+    monkeypatch.setattr(qdrant, "QdrantClient", connect)
+    result = CliRunner().invoke(app, ["apply", "j.yaml"])
+    assert result.exit_code == 2 and "--yes" in result.output
+    assert "creates and fills the collection docs_v2" in result.output
+    assert "sends row text to https://api.example.com/v1" in result.output
 
 
 def test_secrets_typed_into_init_are_hidden_and_saved_only_on_request() -> None:

@@ -15,6 +15,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   an alias (`alias.present`), or need a one-time change to one before a migration can
   switch them (`alias.none`). `bench` samples documents from a collection's payloads.
   See `docs/connectors/qdrant.md`.
+- Migrations into Qdrant with `plan`, `apply`, and `status`: from a Qdrant collection
+  (`source.type: qdrant`) or from a pgvector table (`target.type: qdrant`). `apply` creates
+  a new collection with the source's payloads and payload indexes, fills it with the new
+  model's vectors, and on later runs re-embeds edited points, copies payload-only edits,
+  and removes deleted points. The source is only read, a pgvector source on a read-only
+  connection. Existing job files keep working unchanged.
+- `plan --json` includes `store`, where the new vectors go.
 
 ### Changed
 

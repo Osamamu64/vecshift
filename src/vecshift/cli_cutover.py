@@ -51,17 +51,17 @@ def _locate(job_file: Path) -> _Located:
     from vecshift.connectors.pgvector.writer import Layout
     from vecshift.migrate import JobState
 
-    job, settings, spec = load(job_file)
+    job, settings, spec = load(job_file, command="vecshift cutover, rollback, and cleanup")
     try:
         conn = pgvector.connect_writer(settings)
     except pgvector.ConnectError as exc:
         raise _fail(f"Couldn't connect: {exc}", exc.hint) from exc
     try:
         live = resolve_source_column(
-            conn, job.source.table, job.source.vector_column, job.target.column
+            conn, job.pg_source.table, job.pg_source.vector_column, job.pg_target.column
         )
-        target = inspect_target(conn, job.source.table, live, job.target.column)
-        text = job.source.text_column or _pick(
+        target = inspect_target(conn, job.pg_source.table, live, job.pg_target.column)
+        text = job.pg_source.text_column or _pick(
             _columns(conn, target.source.relid), TEXT_COLUMNS, TEXT_TYPES
         )
     except pgvector.TargetSelectionError as exc:
@@ -76,8 +76,8 @@ def _locate(job_file: Path) -> _Located:
         table=target.source.table,
         pk=target.primary_key[0],
         text=text,
-        target=job.target.column,
-        vector_type=job.target.vector_type.value,
+        target=job.pg_target.column,
+        vector_type=job.pg_target.vector_type.value,
         dims=dims,
         extension_schema=target.extension_schema,
         live=live,
@@ -215,7 +215,7 @@ def cutover(
     lay, state = found.layout, found.state
     writer = PgWriter(found.conn, lay)
     switch = PgSwitch(writer)
-    index = found.job.target.index.value
+    index = found.job.pg_target.index.value
     method = None if index == "none" else index
 
     def run() -> dict[str, Any]:

@@ -57,6 +57,10 @@ Read-only tools. No writes to your stores, no production risk.
   - [x] `--until PERCENT` to stop part way, check, and continue
   - [ ] adaptive rate limiting that backs off on rising latency, not only on 429s
   - [ ] partitioned tables, indexing each partition concurrently and attaching it
+- [x] `vecshift plan`, `apply`, and `status` into Qdrant: a new collection filled from
+  another collection or a pgvector table, with payloads, payload indexes, catch-up of
+  edits and deletes, and only reads on the source
+- [ ] `vecshift cutover`, `rollback`, `cleanup`, and `eval` for Qdrant, switching the alias
 - [x] `vecshift cutover`, `rollback`, and `cleanup` for pgvector and Supabase: the new
   vectors take the column name the application already uses, in one transaction
 - [x] `vecshift eval`: compare old and new vectors on your data, with a go/no-go verdict

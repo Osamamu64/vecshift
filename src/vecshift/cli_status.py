@@ -48,6 +48,9 @@ class Status:
     failed: int
     last_event: dict[str, str] | None
     next: str
+    store: str = "pgvector"
+    """Where the new vectors go. For ``qdrant``, ``live`` is the alias, ``new`` the new
+    collection, and ``previous`` the source."""
 
     @property
     def filled(self) -> float | None:
@@ -124,6 +127,130 @@ def _next(stage: str, missing: int | None) -> str:
     return "Both the new column and the kept old column exist. Read vecshift cutover --check."
 
 
+def _next_qdrant(stage: str, missing: int | None, alias: str) -> str:
+    if stage == "not_started":
+        return "Check the plan with vecshift plan, then run vecshift apply."
+    if stage == "filling":
+        if missing:
+            return (
+                "Run vecshift apply to embed the remaining points; it picks up where it left off."
+            )
+        return "Qdrant is still indexing the new collection. Check again in a while."
+    if stage == "ready":
+        return (
+            f"Compare old and new with vecshift eval, then point {alias or 'your alias'} at "
+            "the new collection with vecshift cutover. Run apply again first to copy recent "
+            "changes."
+        )
+    if stage == "cut_over":
+        return "Searches use the new collection. Undo with vecshift rollback."
+    return "Nothing left to do: the new collection is live."
+
+
+def collect_qdrant(job_file: Path) -> Status:
+    """Where a migration into Qdrant stands. Read-only, but it reads the whole source."""
+    from vecshift.cli_plan import _pg_source, pg_settings, qdrant_settings, read_job
+    from vecshift.connectors import pgvector, qdrant
+    from vecshift.connectors.qdrant.writer import Layout, QdrantSource, QdrantWriter
+    from vecshift.jobs.spec import QdrantSource as QdrantSourceSpec
+    from vecshift.migrate import JobState
+
+    job = read_job(job_file)
+    target = job.qdrant_target
+    state = JobState.for_job(job_file, job.name)
+    settings = qdrant_settings(job.target_url_env, job.target_key_env)
+    closers: list[Any] = []
+    try:
+        client = qdrant.QdrantClient(settings)
+        closers.append(client.close)
+        aliases = dict(client.aliases())
+        collection = job.target_collection
+        source: Any
+        if isinstance(job.source, QdrantSourceSpec):
+            src = job.source
+            reader = client
+            if (src.url_env, src.key_env) != (job.target_url_env, job.target_key_env):
+                reader = qdrant.QdrantClient(qdrant_settings(src.url_env, src.key_env))
+                closers.append(reader.close)
+            alias = target.alias or (src.collection if src.collection in aliases else None)
+            field, _ = qdrant.select_field(reader, src.collection, src.vector)
+            previous = field.collection
+            if aliases.get(src.collection) == collection:
+                # Cut over: the alias now names the new collection. The old one is the
+                # source the job copied from, recorded at cutover.
+                last = next((h for h in reversed(state.history) if "previous" in h), None)
+                previous = last["previous"] if last else previous
+            profile = qdrant.inspect(reader, previous, src.vector, src.text_field, 50)
+            text = (profile.text_field or "").removeprefix("payload.")
+            source = QdrantSource(reader, previous, text, None)
+            label = f"{src.collection} → {previous}" if src.collection != previous else previous
+            vector = target.vector or field.name
+        else:
+            alias = target.alias
+            pg = pg_settings(job.pg_source.dsn_env)
+            profile, table, _ = _pg_source(job, pg, 50)
+            text = profile.text_field or ""
+            from vecshift.connectors.pgvector.reader import PgSource
+
+            conn = pgvector.connect_reader(pg)
+            closers.append(conn.close)
+            source = PgSource(
+                conn, table.source.schema, table.source.table, table.primary_key[0], text
+            )
+            previous = label = f"{table.source.schema}.{table.source.table}"
+            vector = target.vector
+
+        exists = client.exists(collection)
+        last = state.history[-1] if state.history else None
+        rows = missing = None
+        index = None
+        if alias and aliases.get(alias) == collection:
+            stage = "cut_over"
+        elif exists:
+            stage = "filling"
+        elif last and last.get("event") == "cleanup":
+            stage = "cleaned_up"
+        else:
+            stage = "not_started"
+        if exists and text:
+            layout = Layout(collection, vector, 0, "")
+            writer = QdrantWriter(client, source, layout, read_only=True)
+            rows = writer.total_count()
+            missing = writer.pending_count(tuple(state.failed))
+            if client.collection(collection).get("status") == "green":
+                index = "hnsw"
+        if stage == "filling" and missing == 0 and (index or target.index == "none"):
+            stage = "ready"
+    except qdrant.QdrantError as exc:
+        raise _fail(str(exc), exc.hint) from exc
+    except pgvector.ConnectError as exc:
+        raise _fail(f"Couldn't connect: {exc}", exc.hint) from exc
+    except pgvector.TargetSelectionError as exc:
+        raise _fail(str(exc)) from exc
+    finally:
+        for close in closers:
+            close()
+
+    return Status(
+        stage=stage,
+        table=label,
+        live=alias or "",
+        new=collection,
+        previous=previous,
+        rows=rows,
+        missing=missing,
+        index=index,
+        trigger=False,
+        runs=state.runs,
+        rows_written=state.rows_written,
+        spent_usd=state.spent_usd,
+        failed=len(state.failed),
+        last_event=last,
+        next=_next_qdrant(stage, missing, alias or ""),
+        store="qdrant",
+    )
+
+
 def collect(job_file: Path) -> Status:
     from vecshift.connectors import pgvector
     from vecshift.connectors.pgvector.inspect import (
@@ -145,18 +272,18 @@ def collect(job_file: Path) -> Status:
         raise _fail(f"Couldn't connect: {exc}", exc.hint) from exc
     try:
         live = resolve_source_column(
-            conn, job.source.table, job.source.vector_column, job.target.column
+            conn, job.pg_source.table, job.pg_source.vector_column, job.pg_target.column
         )
-        source = select_column(pgvector.find_vector_columns(conn), job.source.table, live)
+        source = select_column(pgvector.find_vector_columns(conn), job.pg_source.table, live)
         columns = _columns(conn, source.relid)
-        text = job.source.text_column or _pick(columns, TEXT_COLUMNS, TEXT_TYPES)
+        text = job.pg_source.text_column or _pick(columns, TEXT_COLUMNS, TEXT_TYPES)
         layout = Layout(
             schema=source.schema,
             table=source.table,
             pk="",
             text=text or "",
-            target=job.target.column,
-            vector_type=job.target.vector_type.value,
+            target=job.pg_target.column,
+            vector_type=job.pg_target.vector_type.value,
             dims=0,
             extension_schema="",
             live=live,
@@ -181,7 +308,7 @@ def collect(job_file: Path) -> Status:
         if holder and text:
             rows, missing = _counts(conn, layout.qualified, text, holder)
         index = _index(conn, source.relid, holder) if holder else None
-        if stage == "filling" and missing == 0 and (index or job.target.index.value == "none"):
+        if stage == "filling" and missing == 0 and (index or job.pg_target.index.value == "none"):
             stage = "ready"
         trigger = _trigger(conn, source.relid, layout.trigger_name())
     except pgvector.TargetSelectionError as exc:
@@ -251,8 +378,11 @@ def _render_rich(status: Status, job_name: str) -> None:
     grid = Table.grid(padding=(0, 2))
     grid.add_column(style="dim", no_wrap=True)
     grid.add_column()
-    grid.add_row("Table", status.table)
-    if status.stage == "cut_over":
+    qd = status.store == "qdrant"
+    grid.add_row("Source" if qd else "Table", status.table)
+    if qd:
+        grid.add_row("Collection", _qdrant_where(status))
+    elif status.stage == "cut_over":
         grid.add_row(
             "Columns", f"{status.live} holds the new vectors · old kept in {status.previous}"
         )
@@ -267,12 +397,15 @@ def _render_rich(status: Status, job_name: str) -> None:
             ("━" * full, ui.ACCENT if status.filled < 1 else "green"),
             ("━" * (width - full), ui.MUTED),
             (f"  {status.filled:.1%}", "bold"),
-            (f"  {status.rows - status.missing:,} of {status.rows:,} rows", "dim"),
+            (f"  {status.rows - status.missing:,} of {status.rows:,} {_unit(status)}", "dim"),
         )
         grid.add_row("Vectors", bar)
     if status.stage in {"filling", "ready", "cut_over", "conflict"}:
-        grid.add_row("Index", status.index or Text("none yet", style="yellow"))
-        grid.add_row("Sync", "trigger installed" if status.trigger else "no trigger")
+        if qd:
+            grid.add_row("Index", "ready" if status.index else Text("indexing", style="yellow"))
+        else:
+            grid.add_row("Index", status.index or Text("none yet", style="yellow"))
+            grid.add_row("Sync", "trigger installed" if status.trigger else "no trigger")
     if status.runs:
         failed = f" · {status.failed:,} rejected" if status.failed else ""
         grid.add_row(
@@ -304,6 +437,19 @@ def _render_rich(status: Status, job_name: str) -> None:
     ui.console.print()
 
 
+def _unit(status: Status) -> str:
+    return "points" if status.store == "qdrant" and "." not in status.previous else "rows"
+
+
+def _qdrant_where(status: Status) -> str:
+    alias = status.live
+    if status.stage == "cut_over":
+        return f"{status.new}, which {alias} now points at · old kept in {status.previous}"
+    if alias:
+        return f"{status.new} · {alias} still points at the old vectors"
+    return f"{status.new} · no alias set"
+
+
 def _render(status: Status, job_name: str) -> None:
     typer.secho(f"vecshift status · {job_name}", bold=True)
     color = {
@@ -314,8 +460,11 @@ def _render(status: Status, job_name: str) -> None:
     }.get(status.stage, typer.colors.BLUE)
     typer.echo("Stage    ", nl=False)
     typer.secho(STAGES[status.stage], fg=color, bold=True)
-    typer.echo(f"Table    {status.table}")
-    if status.stage == "cut_over":
+    qd = status.store == "qdrant"
+    typer.echo(f"{'Source' if qd else 'Table':<9}{status.table}")
+    if qd:
+        typer.echo(f"Target   {_qdrant_where(status)}")
+    elif status.stage == "cut_over":
         typer.echo(
             f"Columns  {status.live} holds the new vectors; the old are in {status.previous}"
         )
@@ -327,8 +476,12 @@ def _render(status: Status, job_name: str) -> None:
         done = status.rows - status.missing
         width = 24
         bar = "█" * round(status.filled * width) + "░" * (width - round(status.filled * width))
-        typer.echo(f"Vectors  {bar} {status.filled:.1%}  ({done:,} of {status.rows:,} rows)")
-    if status.stage in {"filling", "ready", "cut_over", "conflict"}:
+        typer.echo(
+            f"Vectors  {bar} {status.filled:.1%}  ({done:,} of {status.rows:,} {_unit(status)})"
+        )
+    if status.stage in {"filling", "ready", "cut_over", "conflict"} and qd:
+        typer.echo(f"Index    {'ready' if status.index else 'indexing'}")
+    elif status.stage in {"filling", "ready", "cut_over", "conflict"}:
         typer.echo(f"Index    {status.index or 'none yet'}")
         typer.echo(f"Sync     {'trigger installed' if status.trigger else 'no trigger'}")
     if status.runs:
@@ -350,9 +503,11 @@ def status(
     output_json: Annotated[bool, typer.Option("--json", help="Print the status as JSON.")] = False,
 ) -> None:
     """Show where a migration stands and what to run next. Read-only."""
+    from vecshift.cli_plan import read_job
     from vecshift.jobs import load_job
 
-    result = collect(job_file)
+    into_qdrant = read_job(job_file).target.type == "qdrant"
+    result = collect_qdrant(job_file) if into_qdrant else collect(job_file)
     if output_json:
         typer.echo(json.dumps(result.to_dict(), indent=2))
     else:

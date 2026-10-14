@@ -44,7 +44,7 @@ VecShift answers those first, then makes the migration itself safe and repeatabl
 | `vecshift doctor` | Inspect an index: mixed models or sizes, zero and unnormalized vectors, duplicates, missing text, indexing and change-tracking gaps | ✅ pgvector, Supabase, and Qdrant |
 | `vecshift bench` | Compare embedding models on a sample of *your* data: recall, latency, cost, storage | ✅ Available |
 | `vecshift init` / `plan` | Write a migration job, then check it and estimate tokens, cost, time, and storage | ✅ Available |
-| `vecshift apply` | Re-embed into a side-by-side column with resume, a spend cap, live-write sync, and a concurrent index build | ✅ pgvector and Supabase |
+| `vecshift apply` | Re-embed into a side-by-side column or collection with resume, a spend cap, live-write sync, and a concurrent index build | ✅ pgvector, Supabase, and Qdrant, plus pgvector → Qdrant |
 | `vecshift eval` | Compare old and new vectors on your data, per language, with latency vs accuracy, and a go/no-go verdict | ✅ pgvector and Supabase |
 | `vecshift cutover` / `rollback` | Switch searches to the new vectors under the same name, with instant rollback | ✅ pgvector and Supabase |
 
@@ -227,7 +227,8 @@ produces a different tag, because it's a different vector space.
 - [Evaluating a migration](docs/eval.md): quality per language, latency vs accuracy, and the verdict
 - [Benchmarking embedding models](docs/bench.md): sources, model specs, query types, and metrics
 - [pgvector and Supabase](docs/connectors/pgvector.md): connecting, what `doctor` checks, and safety
-- [Qdrant](docs/connectors/qdrant.md): connecting, aliases, and what `doctor` checks
+- [Qdrant](docs/connectors/qdrant.md): connecting, aliases, what `doctor` checks, and
+  migrating into Qdrant
 - [Architecture](docs/architecture.md): the canonical record, plugin contracts, and capability flags
 - [Roadmap](docs/roadmap.md): what's being built, in what order, and why
 - [Security model](docs/security.md): what vecshift sends, stores, and touches

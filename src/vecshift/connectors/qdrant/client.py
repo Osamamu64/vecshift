@@ -1,4 +1,5 @@
-"""A small, read-mostly client for Qdrant's REST API.
+"""A small client for Qdrant's REST API: reads for doctor and bench, and the few writes
+``vecshift apply`` makes to a new collection.
 
 The API key comes from an environment variable only. It is sent only over HTTPS, or over
 plain HTTP to this machine, redirects are never followed, and no message ever includes it.
@@ -99,10 +100,18 @@ class QdrantClient:
 
     # --- plumbing
 
-    def _request(self, method: str, path: str, body: dict[str, Any] | None = None) -> Any:
+    def _request(
+        self,
+        method: str,
+        path: str,
+        body: dict[str, Any] | None = None,
+        *,
+        wait: bool = False,
+    ) -> Any:
         where = self.settings.display
+        params = {"wait": "true"} if wait else None
         try:
-            response = self._http.request(method, path, json=body)
+            response = self._http.request(method, path, json=body, params=params)
         except httpx.TimeoutException as exc:
             raise QdrantError(f"Qdrant at {where} didn't answer in time.") from exc
         except httpx.HTTPError as exc:
@@ -181,16 +190,22 @@ class QdrantClient:
         result = self._request("POST", f"/collections/{_segment(name)}/points/scroll", body) or {}
         return list(result.get("points", [])), result.get("next_page_offset")
 
-    def retrieve(self, name: str, ids: list[int | str]) -> list[dict[str, Any]]:
-        """The points with these IDs, with their payloads."""
+    def retrieve(
+        self, name: str, ids: list[int | str], *, payload: bool = True
+    ) -> list[dict[str, Any]]:
+        """The points with these IDs that exist, with their payloads."""
         if not ids:
             return []
         result = self._request(
             "POST",
             f"/collections/{_segment(name)}/points",
-            {"ids": ids, "with_payload": True, "with_vector": False},
+            {"ids": ids, "with_payload": payload, "with_vector": False},
         )
         return list(result or [])
+
+    def exists(self, name: str) -> bool:
+        """Whether a collection (not an alias) with this name exists."""
+        return name in self.collections()
 
     def random_sample(
         self, name: str, limit: int, *, vector: str | bool = False
@@ -209,6 +224,39 @@ class QdrantClient:
                 return None
             raise
         return list((result or {}).get("points", []))
+
+    # --- writes
+
+    def create_collection(self, name: str, vectors: dict[str, Any]) -> None:
+        self._request("PUT", f"/collections/{_segment(name)}", {"vectors": vectors})
+
+    def create_payload_index(self, name: str, field: str, schema: Any) -> None:
+        self._request(
+            "PUT",
+            f"/collections/{_segment(name)}/index",
+            {"field_name": field, "field_schema": schema},
+            wait=True,
+        )
+
+    def upsert(self, name: str, points: list[dict[str, Any]]) -> None:
+        if points:
+            self._request(
+                "PUT", f"/collections/{_segment(name)}/points", {"points": points}, wait=True
+            )
+
+    def batch(self, name: str, operations: list[dict[str, Any]]) -> None:
+        """Several point updates (overwrite_payload, delete, ...) in one request."""
+        if operations:
+            self._request(
+                "POST",
+                f"/collections/{_segment(name)}/points/batch",
+                {"operations": operations},
+                wait=True,
+            )
+
+    def delete_points(self, name: str, ids: list[int | str]) -> None:
+        if ids:
+            self.batch(name, [{"delete": {"points": ids}}])
 
 
 def _segment(name: str) -> str:

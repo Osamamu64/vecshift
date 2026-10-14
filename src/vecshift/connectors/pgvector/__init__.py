@@ -5,6 +5,7 @@ from vecshift.connectors.pgvector.connection import (
     ConnectionSettings,
     SupabaseMode,
     connect,
+    connect_reader,
     connect_writer,
     prepare,
 )
@@ -22,6 +23,7 @@ __all__ = [
     "TargetSelectionError",
     "VectorColumn",
     "connect",
+    "connect_reader",
     "connect_writer",
     "find_vector_columns",
     "inspect",

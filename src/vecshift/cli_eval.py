@@ -292,8 +292,8 @@ def eval_(
     from vecshift.embeddings import parse_spec
     from vecshift.eval import Gates, SideReport
 
-    job, settings, spec = load(job_file, dsn_env)
-    old_raw = old_model or job.source.model
+    job, settings, spec = load(job_file, dsn_env, command="vecshift eval")
+    old_raw = old_model or job.pg_source.model
     old_spec = parse_spec(old_raw) if old_raw else None
     generator = parse_spec(generate_queries) if generate_queries else None
     if cross_language and generator is None:
@@ -308,17 +308,17 @@ def eval_(
         # One read-only transaction for the setup queries, under a generous time limit.
         conn.execute("SELECT set_config('statement_timeout', %s, true)", (str(SETUP_TIMEOUT_MS),))
         live = resolve_source_column(
-            conn, job.source.table, job.source.vector_column, job.target.column
+            conn, job.pg_source.table, job.pg_source.vector_column, job.pg_target.column
         )
-        target = inspect_target(conn, job.source.table, live, job.target.column)
+        target = inspect_target(conn, job.pg_source.table, live, job.pg_target.column)
         relid = target.source.relid
         names = table_columns(conn, relid)
-        text = job.source.text_column or _pick(names, TEXT_COLUMNS, TEXT_TYPES)
+        text = job.pg_source.text_column or _pick(names, TEXT_COLUMNS, TEXT_TYPES)
         if len(target.primary_key) != 1 or text is None:
             raise _fail("eval needs a single-column primary key and a text column.")
-        cols = _columns(conn, relid, live, job.target.column)
+        cols = _columns(conn, relid, live, job.pg_target.column)
         metric = _metric(
-            conn, relid, cols.old, job.target.metric.value if job.target.metric else None
+            conn, relid, cols.old, job.pg_target.metric.value if job.pg_target.metric else None
         )
         from psycopg import sql
 
