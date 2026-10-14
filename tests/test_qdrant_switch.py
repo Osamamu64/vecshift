@@ -118,7 +118,12 @@ def test_qdrant_side_searches() -> None:
 def test_keys_from_payload_and_distances() -> None:
     fake = eval_fake()
     side = QdrantSide(
-        client(fake), "c", "dense", "Cosine", key_field="slug", to_point=lambda k: int(k[1:])
+        client(fake),
+        "c",
+        "dense",
+        "Cosine",
+        key_field="slug",
+        to_points=lambda ks: [int(k[1:]) for k in ks],
     )
     hits = side.search([0.0, 1.0], 1)
     assert hits[0][0] == "s10" and hits[0][1] == pytest.approx(1 - 10.0)

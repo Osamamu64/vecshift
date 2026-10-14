@@ -126,6 +126,10 @@ def locate(job_file: Path, dsn_env: str | None = None) -> Located:
             previous = (cutovers[-1].get("previous") or None) if cutovers else None
         else:
             previous = aliases.get(alias) if alias else None
+            if previous is None and same_server and isinstance(job.source, QdrantSourceSpec):
+                # A new alias over a collection the application searched by name: that
+                # collection is what rollback returns to, and what cleanup deletes.
+                previous = aliases.get(job.source.collection, job.source.collection)
         if previous == new:
             previous = None
 
@@ -409,7 +413,7 @@ def cutover(
             f"Undo with: vecshift rollback. When you're sure, delete {found.previous} with "
             "vecshift cleanup."
             if found.previous
-            else "The table is unchanged."
+            else "The source is unchanged."
         )
         ui.next_step(
             f"make sure your application embeds queries and new points with "

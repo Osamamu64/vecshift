@@ -49,18 +49,18 @@ class QdrantSide:
         distance: str,
         *,
         key_field: str | None = None,
-        to_point: Callable[[str], int | str] = point_from_key,
+        to_points: Callable[[Sequence[str]], list[int | str]] | None = None,
         group_field: str | None = None,
     ) -> None:
         """``key_field`` names the payload field holding each point's key, when keys aren't
-        point IDs (a pgvector source's primary key); ``to_point`` turns a key back into a
-        point ID."""
+        point IDs (a pgvector source's primary key); ``to_points`` turns keys back into
+        point IDs (those it can't are left out)."""
         self.client = client
         self.collection = collection
         self.vector = vector
         self.distance = distance
         self.key_field = key_field
-        self.to_point = to_point
+        self.to_points = to_points or (lambda keys: [point_from_key(k) for k in keys])
         self.group_field = group_field
         self._index: tuple[str | None, int | None, list[int]] | None = None
 
@@ -128,7 +128,7 @@ class QdrantSide:
         return self._index
 
     def _points(self, keys: Sequence[str]) -> list[dict[str, Any]]:
-        return self.client.vectors(self.collection, [self.to_point(k) for k in keys], self.vector)
+        return self.client.vectors(self.collection, self.to_points(keys), self.vector)
 
     def neighbours(self, key: str, k: int) -> tuple[str | None, list[tuple[str, str]]]:
         own = self._points([key])

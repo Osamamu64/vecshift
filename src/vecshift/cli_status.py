@@ -190,7 +190,12 @@ def collect_qdrant(job_file: Path) -> Status:
 
     rows = missing = None
     index = None
-    if stage in {"filling", "cut_over"}:
+    recorded = any(e.get("event") == "cutover" for e in events)
+    unknown = stage == "cut_over" and isinstance(job.source, QdrantSourceSpec) and not recorded
+    if unknown:
+        # Cut over from another folder: the old collection isn't known here.
+        previous = "unknown (no cutover record in this folder)"
+    if stage in {"filling", "cut_over"} and not unknown:
         found = cli_qdrant.locate(job_file)
         try:
             previous = found.previous or previous

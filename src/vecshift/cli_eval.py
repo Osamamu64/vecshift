@@ -418,12 +418,6 @@ def _setup_qdrant(job_file: Path, group_by: str | None, dsn_env: str | None = No
             if not isinstance(source, PgSource):
                 raise _fail("Unknown source for this job.")
             pk = source.pk
-            sample = source.page(None, 1)[0]
-            numeric = bool(sample) and isinstance(sample[0].key, int)
-
-            def to_point(key: str) -> int | str:
-                return point_id(int(key)) if numeric else point_id(key)
-
             settings = pg_settings(dsn_env or found.job.pg_source.dsn_env)
             prepared = _setup_pg_source(found, settings)
             conn, target, live, kind, metric = prepared
@@ -437,6 +431,7 @@ def _setup_qdrant(job_file: Path, group_by: str | None, dsn_env: str | None = No
                 types={"old": kind, "new": kind},
                 extension_schema=target.extension_schema,
                 metric=metric,
+                key_fn=lambda value: str(point_id(value)),
             )
             old_side = PgSide(pg, "old")
             new_side = QdrantSide(
@@ -444,8 +439,6 @@ def _setup_qdrant(job_file: Path, group_by: str | None, dsn_env: str | None = No
                 found.new,
                 lay.vector,
                 lay.distance,
-                key_field=pk,
-                to_point=to_point,
                 group_field=group,
             )
             rows = pg

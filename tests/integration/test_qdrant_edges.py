@@ -91,7 +91,9 @@ def test_keys_whose_json_differs_from_their_text(
         "embedding extensions.vector(3))"
     )
     setup.execute(
-        f"INSERT INTO t SELECT {values}, 'Row ' || g || ' text', 1e20, '[1,0,0]' "
+        f"INSERT INTO t SELECT {values}, 'Row ' || g || ' explains refunds, deliveries and "
+        "the account settings for "
+        "customer case ' || g * 13 || '.', 1e20, '[1,0,0]' "
         "FROM generate_series(1, 10) g"
     )
     monkeypatch.setenv("VECSHIFT_DSN", db_dsn)
@@ -107,7 +109,13 @@ def test_keys_whose_json_differs_from_their_text(
     assert second["rows_written"] == 0 and second["deleted"] == 0
     assert second["payloads_copied"] == 0, "big numbers come back as floats; still the same"
     assert len(points(http, new)) == 10
-    setup.execute("DELETE FROM t WHERE body = 'Row 3 text'")
+    # eval matches rows across both sides by key, whatever its type.
+    evaluated = cli(
+        tmp_path, monkeypatch, "eval", "--json", "-y", "--num-queries", "8", "--neighbours", "5"
+    )
+    assert evaluated.exit_code in {0, 1, 3}, evaluated.output
+    assert json.loads(evaluated.output)["new"]["scores"]["all"]["recall_at_10"] > 0.5
+    setup.execute("DELETE FROM t WHERE body LIKE 'Row 3 %'")
     third = last_json(cli(tmp_path, monkeypatch, "apply", "--yes", "--json").output)
     assert third["deleted"] == 1 and len(points(http, new)) == 9
     switched = cli(tmp_path, monkeypatch, "cutover", "--yes", "--json")
@@ -190,3 +198,34 @@ def test_rollback_needs_the_cutover_record(
     assert alias_target(http, live) == new
     cleaned = cli(tmp_path, monkeypatch, "cleanup", "--yes")
     assert cleaned.exit_code == 2 and http.get(f"/collections/{old}").status_code == 200
+
+
+def test_new_alias_over_a_collection_searched_by_name(
+    http: httpx.Client, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """What plan.no_alias recommends: the application searched the collection by name and
+    switches to a new alias. Rollback returns the alias to that collection."""
+    old, new, live = name(), name(), name()
+    collection(http, old, docs(4))
+    (tmp_path / "vecshift.yaml").write_text(
+        f"source: {{type: qdrant, collection: {old}}}\n"
+        f"target: {{collection: {new}, alias: {live}}}\nmodel: hash/8\n"
+    )
+    assert cli(tmp_path, monkeypatch, "apply", "--yes").exit_code == 0
+    switched = json.loads(cli(tmp_path, monkeypatch, "cutover", "--yes", "--json").output)
+    assert switched["previous"] == old and alias_target(http, live) == new
+    assert cli(tmp_path, monkeypatch, "rollback", "--yes").exit_code == 0
+    assert alias_target(http, live) == old
+    assert cli(tmp_path, monkeypatch, "cutover", "--yes").exit_code == 0
+
+    shutil.copytree(tmp_path / ".vecshift", tmp_path / "kept")
+    shutil.rmtree(tmp_path / ".vecshift")
+    status = cli(tmp_path, monkeypatch, "status", "--json")
+    assert status.exit_code == 0, status.output
+    found = json.loads(status.output)
+    assert found["stage"] == "cut_over" and "unknown" in found["previous"]
+    shutil.copytree(tmp_path / "kept", tmp_path / ".vecshift")
+
+    done = cli(tmp_path, monkeypatch, "cleanup", "--yes", "--json")
+    assert done.exit_code == 0 and json.loads(done.output)["deleted"] == old
+    assert alias_target(http, live) == new
