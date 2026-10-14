@@ -31,6 +31,7 @@ class SideSearcher(Protocol):
 class Rows(Protocol):
     def sample(self, text: str, size: int) -> list[tuple[str, str]]: ...
     def texts(self, text: str, keys: Sequence[str]) -> dict[str, str]: ...
+    def translate(self, keys: Sequence[str]) -> dict[str, str]: ...
 
 
 def point_from_key(key: str) -> int | str:
@@ -172,6 +173,10 @@ class QdrantRows:
                 rows.append((side._key(point), value))
         return sorted(rows)[:size]
 
+    def translate(self, keys: Sequence[str]) -> dict[str, str]:
+        """Labeled queries name points by their IDs, which is how eval names them too."""
+        return {k: k for k in keys}
+
     def texts(self, text: str, keys: Sequence[str]) -> dict[str, str]:
         found = {}
         for point in self.side._points(keys):
@@ -219,6 +224,9 @@ class SplitSearcher:
 
     def texts(self, text: str, keys: Sequence[str]) -> dict[str, str]:
         return self.rows.texts(text, keys)
+
+    def translate(self, keys: Sequence[str]) -> dict[str, str]:
+        return self.rows.translate(keys)
 
     def search(
         self, side: Side, vector: Sequence[float], k: int, setting: int | None = None

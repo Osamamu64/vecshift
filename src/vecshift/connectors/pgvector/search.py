@@ -253,6 +253,18 @@ class PgSearcher:
         rows = self._run(query, (values[0], vector, k), settings)
         return group, [(self._out(r[0]), r[1]) for r in rows]
 
+    def translate(self, keys: Sequence[str]) -> dict[str, str]:
+        """Rows named by their key's text form (as in a labeled queries file), as this
+        searcher names them. Keys that aren't in the table are left out."""
+        if self.key_fn is None:
+            return {k: k for k in keys}
+        if not keys:
+            return {}
+        query = sql.SQL("SELECT {pk}::text, {pk} FROM {table} WHERE {pk}::text = ANY(%s)").format(
+            pk=self.pk, table=self.table
+        )
+        return {str(t): self._out(v) for t, v in self._run(query, (list(keys),), {})}
+
     def vectors(self, side: Side, keys: Sequence[str]) -> list[list[float]]:
         """Stored vectors of the given rows."""
         if not keys:
