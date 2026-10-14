@@ -12,14 +12,23 @@ import json
 import re
 from enum import StrEnum
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from vecshift.embeddings.spec import SpecError, parse_spec
 
 _IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
+_COLLECTION = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,254}$")
+_ENV = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 class JobError(ValueError):
@@ -36,7 +45,32 @@ def _identifier(value: str | None, what: str) -> str | None:
     return value
 
 
+def _collection(value: str | None) -> str | None:
+    if value is not None and not _COLLECTION.match(value):
+        raise ValueError(
+            f"must be a Qdrant collection or alias name (letters, digits, _ . -), got {value!r}"
+        )
+    return value
+
+
+def _env(value: str | None) -> str | None:
+    if value is not None and not _ENV.match(value):
+        raise ValueError(f"must be an environment variable name, got {value!r}")
+    return value
+
+
+def _check_model(value: str | None) -> str | None:
+    if value is not None:
+        try:
+            parse_spec(value)
+        except SpecError as exc:
+            raise ValueError(str(exc)) from None
+    return value
+
+
 class Source(_Strict):
+    """A pgvector table."""
+
     type: Literal["pgvector"] = "pgvector"
     dsn_env: str = "VECSHIFT_DSN"
     """Environment variable holding the connection string. The file never stores it."""
@@ -64,12 +98,49 @@ class Source(_Strict):
     @field_validator("model")
     @classmethod
     def _old_model(cls, value: str | None) -> str | None:
-        if value is not None:
-            try:
-                parse_spec(value)
-            except SpecError as exc:
-                raise ValueError(str(exc)) from None
+        return _check_model(value)
+
+
+DEFAULT_QDRANT_URL_ENV = "VECSHIFT_QDRANT_URL"
+DEFAULT_QDRANT_KEY_ENV = "QDRANT_API_KEY"
+
+
+class QdrantSource(_Strict):
+    """A Qdrant collection, ideally reached through the alias the application searches."""
+
+    type: Literal["qdrant"]
+    url_env: str = DEFAULT_QDRANT_URL_ENV
+    """Environment variable holding the Qdrant URL."""
+    key_env: str = DEFAULT_QDRANT_KEY_ENV
+    """Environment variable holding the API key, if the server needs one."""
+    collection: str
+    """The alias the application searches (or the collection itself, if it has none)."""
+    vector: str | None = None
+    """The named vector to re-embed, when the collection has several."""
+    text_field: str | None = None
+    """Payload field with the text, such as ``page_content`` or ``metadata.body``."""
+    model: str | None = None
+    """The model that made the current vectors, so ``eval`` can embed queries for them."""
+
+    @field_validator("collection")
+    @classmethod
+    def _name(cls, value: str) -> str:
+        _collection(value)
         return value
+
+    @field_validator("url_env", "key_env")
+    @classmethod
+    def _envs(cls, value: str) -> str:
+        _env(value)
+        return value
+
+    @field_validator("model")
+    @classmethod
+    def _old_model(cls, value: str | None) -> str | None:
+        return _check_model(value)
+
+
+STORES = ("pgvector", "qdrant")
 
 
 class VectorType(StrEnum):
@@ -90,6 +161,9 @@ class Metric(StrEnum):
 
 
 class Target(_Strict):
+    """A new column next to the old one, in the same pgvector table."""
+
+    type: Literal["pgvector"] = "pgvector"
     column: str = "embedding_v2"
     """New column on the source table. Cutover swaps it with the old one by renaming."""
     vector_type: VectorType = VectorType.VECTOR
@@ -104,6 +178,35 @@ class Target(_Strict):
         return value
 
 
+class QdrantTarget(_Strict):
+    """A new Qdrant collection. Cutover points the application's alias at it."""
+
+    type: Literal["qdrant"]
+    url_env: str | None = None
+    """Defaults to the source's, or VECSHIFT_QDRANT_URL when the source is PostgreSQL."""
+    key_env: str | None = None
+    collection: str | None = None
+    """The new collection. Defaults to the alias (or table) name with ``_v2``."""
+    vector: str | None = None
+    """Name for the new vector. Defaults to the source's, so queries keep working."""
+    alias: str | None = None
+    """The alias cutover points at the new collection. Defaults to source.collection when
+    that's an alias."""
+    index: Literal["hnsw", "none"] = "hnsw"
+    metric: Metric | None = None
+    """Distance for the new collection. Defaults to the source's, or cosine."""
+
+    @field_validator("collection", "alias")
+    @classmethod
+    def _names(cls, value: str | None) -> str | None:
+        return _collection(value)
+
+    @field_validator("url_env", "key_env")
+    @classmethod
+    def _envs(cls, value: str | None) -> str | None:
+        return _env(value)
+
+
 class Limits(_Strict):
     budget_usd: float | None = Field(default=None, gt=0)
     """Stop before spending more than this. Plan fails when the estimate exceeds it."""
@@ -112,20 +215,92 @@ class Limits(_Strict):
     requests_per_minute: int | None = Field(default=None, gt=0)
 
 
+AnySource = Annotated[Source | QdrantSource, Field(discriminator="type")]
+AnyTarget = Annotated[Target | QdrantTarget, Field(discriminator="type")]
+
+
 class JobSpec(_Strict):
     version: Literal[1] = 1
     name: str = "migration"
-    source: Source
-    target: Target = Target()
+    source: AnySource
+    target: AnyTarget = Target()
     model: str
     """A model spec, as for ``vecshift bench``: ``provider/model[,option=value]``."""
     limits: Limits = Limits()
 
-    @field_validator("target", "limits", mode="before")
+    @model_validator(mode="before")
     @classmethod
-    def _empty_section(cls, value: object) -> object:
-        # A section whose settings are all commented out reads as null: use the defaults.
-        return {} if value is None else value
+    def _types(cls, data: Any) -> Any:
+        """Fill in the store types: pgvector unless said otherwise, and the target's
+        defaults to the source's."""
+        if not isinstance(data, dict):
+            return data
+        data = dict(data)
+        for key in ("target", "limits"):
+            # A section whose settings are all commented out reads as null: use the defaults.
+            if key in data and data[key] is None:
+                data[key] = {}
+        source = data.get("source")
+        if isinstance(source, dict) and "type" not in source:
+            data["source"] = source = {**source, "type": "pgvector"}
+        kind = source.get("type") if isinstance(source, dict) else None
+        target = data.get("target", {})
+        if isinstance(target, dict) and "type" not in target and kind in STORES:
+            data["target"] = {**target, "type": kind}
+        return data
+
+    @model_validator(mode="after")
+    def _pairs(self) -> JobSpec:
+        if self.source.type == "qdrant" and self.target.type != "qdrant":
+            raise ValueError("a Qdrant source needs a Qdrant target (target.type: qdrant)")
+        return self
+
+    @property
+    def pg_source(self) -> Source:
+        if not isinstance(self.source, Source):
+            raise TypeError("not a pgvector source")
+        return self.source
+
+    @property
+    def pg_target(self) -> Target:
+        if not isinstance(self.target, Target):
+            raise TypeError("not a pgvector target")
+        return self.target
+
+    @property
+    def qdrant_target(self) -> QdrantTarget:
+        if not isinstance(self.target, QdrantTarget):
+            raise TypeError("not a Qdrant job")
+        return self.target
+
+    @property
+    def target_url_env(self) -> str:
+        target = self.qdrant_target
+        if target.url_env:
+            return target.url_env
+        if isinstance(self.source, QdrantSource):
+            return self.source.url_env
+        return DEFAULT_QDRANT_URL_ENV
+
+    @property
+    def target_key_env(self) -> str:
+        target = self.qdrant_target
+        if target.key_env:
+            return target.key_env
+        if isinstance(self.source, QdrantSource):
+            return self.source.key_env
+        return DEFAULT_QDRANT_KEY_ENV
+
+    @property
+    def target_collection(self) -> str:
+        target = self.qdrant_target
+        if target.collection:
+            return target.collection
+        if isinstance(self.source, QdrantSource):
+            base = target.alias or self.source.collection
+        else:
+            base = target.alias or self.source.table.split(".")[-1]
+        return f"{base}_v2"
 
     @field_validator("model")
     @classmethod
@@ -140,7 +315,10 @@ class JobSpec(_Strict):
 def format_errors(error: ValidationError) -> str:
     lines = []
     for item in error.errors():
-        where = ".".join(str(p) for p in item["loc"]) or "file"
+        # Union members show up in the location, as in source.qdrant.collection.
+        parts = [str(p) for p in item["loc"]]
+        parts = [p for i, p in enumerate(parts) if not (i == 1 and p in STORES)]
+        where = ".".join(parts) or "file"
         message = item["msg"].removeprefix("Value error, ")
         if item["type"] == "extra_forbidden":
             message = "unknown setting"

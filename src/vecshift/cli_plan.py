@@ -11,7 +11,7 @@ import textwrap
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, Any
 
 import typer
 
@@ -20,10 +20,12 @@ from vecshift.cli_style import finding_lines
 if TYPE_CHECKING:
     from vecshift.connectors.pgvector import ConnectionSettings
     from vecshift.connectors.pgvector.target import TargetState
+    from vecshift.connectors.qdrant import QdrantSettings
+    from vecshift.connectors.qdrant.target import QdrantTargetState
     from vecshift.doctor import IndexProfile
     from vecshift.embeddings import ModelSpec
     from vecshift.jobs import JobSpec
-    from vecshift.planning import Plan, ProbeResult
+    from vecshift.planning import Plan, ProbeResult, SampleStats
 
 DEFAULT_JOB = Path("vecshift.yaml")
 PROBE_DOCUMENTS = 16
@@ -89,9 +91,15 @@ def _estimate_rows(plan: Plan) -> list[tuple[str, str, str]]:
         ("Requests", f"{e.requests:,}" if e.requests is not None else "—", ""),
         ("Duration", _duration(e.seconds), e.seconds_method or "add a rate limit or --probe"),
         (
-            "New column",
+            "New vectors" if plan.store == "qdrant" else "New column",
             _size(e.new_bytes),
-            f"old column {_size(e.old_bytes)}" if e.old_bytes else "",
+            (
+                f"old vectors {_size(e.old_bytes)}"
+                if plan.store == "qdrant"
+                else f"old column {_size(e.old_bytes)}"
+            )
+            if e.old_bytes
+            else "",
         ),
     ]
     if e.index_memory_bytes:
@@ -107,6 +115,7 @@ def _estimate_rows(plan: Plan) -> list[tuple[str, str, str]]:
 
 CHANGE_MARKS = {
     "add_column": ("+", "green"),
+    "create_collection": ("+", "green"),
     "trigger": ("+", "green"),
     "embed": ("~", "#3987e5"),
     "index": ("+", "green"),
@@ -174,7 +183,7 @@ def _render(plan: Plan) -> None:
     typer.echo(f"Model   {plan.model} → {dims} dimensions ({source_note})")
 
     typer.secho("\nChanges", bold=True)
-    marks = {"add_column": "+", "trigger": "+", "embed": "~", "index": "+", "cutover": "⇄"}
+    marks = {k: mark for k, (mark, _) in CHANGE_MARKS.items()}
     for change in plan.changes:
         typer.echo(f"  {marks.get(change.kind, '·')} {change.summary}")
         if change.sql:
@@ -231,19 +240,11 @@ class Prepared:
     plan: Plan
 
 
-def load(
-    job_file: Path, dsn_env: str | None = None
-) -> tuple[JobSpec, ConnectionSettings, ModelSpec]:
-    """The job, its connection settings (from the environment), and its model.
-
-    ``dsn_env`` reads the connection string from another variable, such as a replica's.
-    """
-    from vecshift.connectors import pgvector
-    from vecshift.embeddings import parse_spec
+def read_job(job_file: Path) -> JobSpec:
     from vecshift.jobs import JobError, load_job
 
     try:
-        job = load_job(job_file)
+        return load_job(job_file)
     except JobError as exc:
         hint = (
             "Create one with: vecshift init --table ... --model ..."
@@ -251,7 +252,12 @@ def load(
             else None
         )
         raise _fail(str(exc), hint) from exc
-    variable = dsn_env or job.source.dsn_env
+
+
+def pg_settings(variable: str) -> ConnectionSettings:
+    """Connection settings from the variable holding the connection string."""
+    from vecshift.connectors import pgvector
+
     dsn = os.environ.get(variable)
     if not dsn:
         raise _fail(
@@ -260,54 +266,52 @@ def load(
             "here, or run vecshift init to set it up.",
         )
     try:
-        settings = pgvector.prepare(dsn)
+        return pgvector.prepare(dsn)
     except pgvector.ConnectError as exc:
         raise _fail(f"Couldn't connect: {exc}", exc.hint) from exc
+
+
+def qdrant_settings(url_env: str, key_env: str) -> QdrantSettings:
+    from vecshift.connectors import qdrant
+
+    url = os.environ.get(url_env)
+    if not url:
+        raise _fail(
+            f"{url_env} isn't set.",
+            f"Export the Qdrant URL as {url_env} (and the API key as {key_env}, if the "
+            "server needs one), or put them in a .env file here.",
+        )
+    try:
+        return qdrant.prepare(url, key_env)
+    except qdrant.QdrantError as exc:
+        raise _fail(str(exc), exc.hint) from exc
+
+
+def load(
+    job_file: Path, dsn_env: str | None = None, *, command: str = "This command"
+) -> tuple[JobSpec, ConnectionSettings, ModelSpec]:
+    """The job, its connection settings (from the environment), and its model.
+
+    ``dsn_env`` reads the connection string from another variable, such as a replica's.
+    """
+    from vecshift.embeddings import parse_spec
+
+    job = read_job(job_file)
+    if job.target.type == "qdrant":
+        raise _fail(
+            f"{command} can't handle migrations into Qdrant yet.",
+            "vecshift plan, apply, and status do; the rest is coming in the next release.",
+        )
+    settings = pg_settings(dsn_env or job.pg_source.dsn_env)
     return job, settings, parse_spec(job.model)
 
 
-def prepare(
-    job_file: Path, *, sample_size: int = 2000, probe: bool = False, yes: bool = False
-) -> Prepared:
-    """Load the job, inspect the database read-only, and build the plan."""
-    from vecshift.connectors import pgvector
-    from vecshift.connectors.pgvector.documents import sample_documents
-    from vecshift.connectors.pgvector.target import inspect_target, resolve_source_column
+def _measure(
+    spec: ModelSpec, texts: list[str], *, probe: bool, yes: bool
+) -> tuple[SampleStats, ProbeResult | None]:
+    """Sample statistics, and a probe of the real model if asked for."""
     from vecshift.embeddings import EmbeddingError
-    from vecshift.planning import SampleStats, build_plan
-
-    job, settings, spec = load(job_file)
-    try:
-        conn = pgvector.connect(settings)
-    except pgvector.ConnectError as exc:
-        raise _fail(f"Couldn't connect: {exc}", exc.hint) from exc
-    try:
-        source_column = resolve_source_column(
-            conn, job.source.table, job.source.vector_column, job.target.column
-        )
-        profile = pgvector.inspect(
-            conn,
-            table=job.source.table,
-            column=source_column,
-            text_column=job.source.text_column,
-            sample_size=sample_size,
-        )
-        target = inspect_target(conn, job.source.table, source_column, job.target.column)
-        texts: list[str] = []
-        if profile.text_field:
-            rows, _ = sample_documents(
-                conn,
-                job.source.table,
-                source_column,
-                profile.text_field,
-                min(sample_size, 500),
-            )
-            texts = [t for _, t in rows]
-    except pgvector.TargetSelectionError as exc:
-        raise _fail(str(exc)) from exc
-    finally:
-        conn.rollback()
-        conn.close()
+    from vecshift.planning import SampleStats
 
     stats = SampleStats(
         documents=len(texts), average_chars=sum(map(len, texts)) / len(texts) if texts else 0.0
@@ -329,8 +333,187 @@ def prepare(
         except EmbeddingError as exc:
             raise _fail(f"The probe failed: {exc}") from exc
 
+    return stats, measured
+
+
+def prepare(
+    job_file: Path, *, sample_size: int = 2000, probe: bool = False, yes: bool = False
+) -> Prepared:
+    """Load the job, inspect the database read-only, and build the plan."""
+    from vecshift.connectors import pgvector
+    from vecshift.connectors.pgvector.documents import sample_documents
+    from vecshift.connectors.pgvector.target import inspect_target, resolve_source_column
+    from vecshift.planning import build_plan
+
+    job, settings, spec = load(job_file)
+    try:
+        conn = pgvector.connect(settings)
+    except pgvector.ConnectError as exc:
+        raise _fail(f"Couldn't connect: {exc}", exc.hint) from exc
+    try:
+        source_column = resolve_source_column(
+            conn, job.pg_source.table, job.pg_source.vector_column, job.pg_target.column
+        )
+        profile = pgvector.inspect(
+            conn,
+            table=job.pg_source.table,
+            column=source_column,
+            text_column=job.pg_source.text_column,
+            sample_size=sample_size,
+        )
+        target = inspect_target(conn, job.pg_source.table, source_column, job.pg_target.column)
+        texts: list[str] = []
+        if profile.text_field:
+            rows, _ = sample_documents(
+                conn,
+                job.pg_source.table,
+                source_column,
+                profile.text_field,
+                min(sample_size, 500),
+            )
+            texts = [t for _, t in rows]
+    except pgvector.TargetSelectionError as exc:
+        raise _fail(str(exc)) from exc
+    finally:
+        conn.rollback()
+        conn.close()
+
+    stats, measured = _measure(spec, texts, probe=probe, yes=yes)
     result = build_plan(job, profile, target, stats, measured)
     return Prepared(job, settings, spec, profile, target, result)
+
+
+@dataclass(slots=True)
+class QdrantPrepared:
+    """Everything known about a migration into Qdrant before anything changes."""
+
+    job: JobSpec
+    spec: ModelSpec
+    profile: IndexProfile
+    target: QdrantTargetState
+    plan: Plan
+    qdrant: QdrantSettings
+    """Where the new collection goes."""
+    text_field: str
+    """The payload path (Qdrant source) or column (pgvector source) holding the text."""
+    source_qdrant: QdrantSettings | None = None
+    source_pg: ConnectionSettings | None = None
+    pg: TargetState | None = None
+    """The source table, for a pgvector source."""
+
+
+def prepare_qdrant(
+    job_file: Path, *, sample_size: int = 2000, probe: bool = False, yes: bool = False
+) -> QdrantPrepared:
+    """Load a job whose target is Qdrant, inspect both sides read-only, and plan it."""
+    from vecshift.connectors import pgvector, qdrant
+    from vecshift.connectors.qdrant.target import inspect_target
+    from vecshift.embeddings import parse_spec
+    from vecshift.jobs.spec import QdrantSource
+    from vecshift.planning.qdrant import build_qdrant_plan
+
+    job = read_job(job_file)
+    spec = parse_spec(job.model)
+    settings = qdrant_settings(job.target_url_env, job.target_key_env)
+    target_spec = job.qdrant_target
+    texts: list[str] = []
+    pg: TargetState | None = None
+    source_qdrant: QdrantSettings | None = None
+    source_pg: ConnectionSettings | None = None
+    try:
+        if isinstance(job.source, QdrantSource):
+            src = job.source
+            source_qdrant = (
+                settings
+                if (src.url_env, src.key_env) == (job.target_url_env, job.target_key_env)
+                else qdrant_settings(src.url_env, src.key_env)
+            )
+            with qdrant.QdrantClient(source_qdrant) as client:
+                field, info = qdrant.select_field(client, src.collection, src.vector)
+                profile = qdrant.inspect(
+                    client, src.collection, src.vector, src.text_field, sample_size
+                )
+                text_field = (profile.text_field or "").removeprefix("payload.")
+                if text_field:
+                    texts = _qdrant_texts(client, field.collection, text_field, sample_size)
+            vector = target_spec.vector or field.name
+            with qdrant.QdrantClient(settings) as client:
+                target = inspect_target(
+                    client,
+                    job.target_collection,
+                    vector,
+                    target_spec.alias,
+                    (src.collection, field, info),
+                )
+        else:
+            source_pg = pg_settings(job.pg_source.dsn_env)
+            profile, pg, texts = _pg_source(job, source_pg, sample_size)
+            text_field = profile.text_field or ""
+            with qdrant.QdrantClient(settings) as client:
+                target = inspect_target(
+                    client, job.target_collection, target_spec.vector, target_spec.alias
+                )
+    except qdrant.QdrantError as exc:
+        raise _fail(str(exc), exc.hint) from exc
+    except pgvector.ConnectError as exc:
+        raise _fail(f"Couldn't connect: {exc}", exc.hint) from exc
+    except pgvector.TargetSelectionError as exc:
+        raise _fail(str(exc)) from exc
+
+    stats, measured = _measure(spec, texts, probe=probe, yes=yes)
+    result = build_qdrant_plan(job, profile, target, stats, measured, pg)
+    return QdrantPrepared(
+        job=job,
+        spec=spec,
+        profile=profile,
+        target=target,
+        plan=result,
+        qdrant=settings,
+        text_field=text_field,
+        source_qdrant=source_qdrant,
+        source_pg=source_pg,
+        pg=pg,
+    )
+
+
+def _qdrant_texts(client: Any, collection: str, text_field: str, size: int) -> list[str]:
+    from vecshift.connectors.qdrant.inspect import _get, _points
+
+    points, _ = _points(client, collection, False, min(size, 500), size + 1)
+    texts = [_get(p.get("payload") or {}, text_field) for p in points]
+    return [t for t in texts if isinstance(t, str) and t.strip()]
+
+
+def _pg_source(
+    job: JobSpec, settings: ConnectionSettings, sample_size: int
+) -> tuple[IndexProfile, TargetState, list[str]]:
+    """Profile a pgvector table that's the source of a migration elsewhere."""
+    from vecshift.connectors import pgvector
+    from vecshift.connectors.pgvector.documents import sample_documents
+    from vecshift.connectors.pgvector.target import inspect_target
+
+    source = job.pg_source
+    conn = pgvector.connect(settings)
+    try:
+        profile = pgvector.inspect(
+            conn,
+            table=source.table,
+            column=source.vector_column,
+            text_column=source.text_column,
+            sample_size=sample_size,
+        )
+        column = profile.target.rsplit(".", 1)[-1]
+        state = inspect_target(conn, source.table, column, "")
+        texts: list[str] = []
+        if profile.text_field:
+            rows, _ = sample_documents(
+                conn, source.table, column, profile.text_field, min(sample_size, 500)
+            )
+            texts = [t for _, t in rows]
+    finally:
+        conn.rollback()
+        conn.close()
+    return profile, state, texts
 
 
 def plan(
@@ -351,7 +534,8 @@ def plan(
     output_json: Annotated[bool, typer.Option("--json", help="Print the plan as JSON.")] = False,
 ) -> None:
     """Check a migration job and estimate it, without changing anything."""
-    result = prepare(job_file, sample_size=sample_size, probe=probe, yes=yes).plan
+    run = prepare_qdrant if read_job(job_file).target.type == "qdrant" else prepare
+    result = run(job_file, sample_size=sample_size, probe=probe, yes=yes).plan
     if output_json:
         typer.echo(json.dumps(result.to_dict(), indent=2))
     else:

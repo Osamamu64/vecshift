@@ -23,12 +23,53 @@ class FakeQdrant:
         self.random_sampling = True
         self.requests: list[httpx.Request] = []
 
-    def add(self, name: str, vectors: dict[str, Any], points: list[dict[str, Any]]) -> None:
+    def add(
+        self,
+        name: str,
+        vectors: dict[str, Any],
+        points: list[dict[str, Any]],
+        **extra: Any,
+    ) -> None:
         self.collections[name] = {
+            "status": "green",
             "points_count": len(points),
             "config": {"params": {"vectors": vectors}, "hnsw_config": {"m": 16}},
+            **extra,
         }
         self.points[name] = points
+
+    def _sorted(self, name: str) -> list[dict[str, Any]]:
+        # Like Qdrant: integer IDs first, in order, then UUIDs.
+        return sorted(
+            self.points[name], key=lambda p: (isinstance(p["id"], str), str(p["id"]).zfill(20))
+        )
+
+    def _write(self, request: httpx.Request, parts: list[str], body: Any) -> httpx.Response:
+        ok = httpx.Response(200, json={"result": True, "status": "ok"})
+        name = parts[1]
+        if len(parts) == 2:
+            self.add(name, body["vectors"], [])
+            return ok
+        info, points = self.collections[name], self.points[name]
+        if parts[-1] == "index":
+            schema = info.setdefault("payload_schema", {})
+            schema[body["field_name"]] = {"data_type": body["field_schema"]}
+            return ok
+        if parts[-1] == "points":  # upsert
+            new = {p["id"]: p for p in body["points"]}
+            points[:] = [p for p in points if p["id"] not in new] + list(new.values())
+        elif parts[-1] == "batch":
+            for op in body["operations"]:
+                if "overwrite_payload" in op:
+                    o = op["overwrite_payload"]
+                    for p in points:
+                        if p["id"] in o["points"]:
+                            p["payload"] = o["payload"]
+                elif "delete" in op:
+                    gone = set(op["delete"]["points"])
+                    points[:] = [p for p in points if p["id"] not in gone]
+        info["points_count"] = len(points)
+        return ok
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
@@ -46,23 +87,37 @@ class FakeQdrant:
             )
         parts = path.strip("/").split("/")
         name = parts[1] if len(parts) > 1 else ""
+        if request.method == "PUT" or parts[-1] == "batch":
+            return self._write(request, parts, body)
         if name not in self.collections:
             return httpx.Response(404, json={"status": {"error": "Not found"}})
         if len(parts) == 2:
             return ok(self.collections[name])
-        points = self.points[name]
+        points = self._sorted(name)
         if parts[-1] == "query":
             if not self.random_sampling:
                 return httpx.Response(400, json={"status": {"error": "unknown variant"}})
             return ok({"points": points[: body["limit"]]})
         if parts[-1] == "scroll":
-            start = body.get("offset") or 0
+            offset = body.get("offset")
+            start = 0
+            if offset is not None:
+                ids = [p["id"] for p in points]
+                key = (isinstance(offset, str), str(offset).zfill(20))
+                keys = [(isinstance(i, str), str(i).zfill(20)) for i in ids]
+                start = next((n for n, k in enumerate(keys) if k >= key), len(points))
             page = points[start : start + body["limit"]]
-            nxt = start + body["limit"] if start + body["limit"] < len(points) else None
+            rest = points[start + body["limit"] :]
+            nxt = rest[0]["id"] if rest else None
+            with_payload = body.get("with_payload", True)
+            if with_payload is False:
+                page = [{k: v for k, v in p.items() if k != "payload"} for p in page]
             return ok({"points": page, "next_page_offset": nxt})
         if parts[-1] == "points":
             wanted = set(body["ids"])
             return ok([p for p in points if p["id"] in wanted])
+        if parts[-1] == "count":
+            return ok({"count": len(points)})
         return httpx.Response(404)
 
 

@@ -38,8 +38,8 @@ def _bytes_per_vector(vector_type: str, dims: int) -> int:
 
 
 def _metric(job: JobSpec, profile: IndexProfile) -> str:
-    if job.target.metric:
-        return job.target.metric.value
+    if job.pg_target.metric:
+        return job.pg_target.metric.value
     for index in profile.ann_indexes:
         if index.metric in {"cosine", "inner_product", "l2"}:
             return index.metric
@@ -114,6 +114,172 @@ def _model_findings(spec: ModelSpec, findings: list[Finding]) -> None:
         )
 
 
+def text_findings(
+    profile: IndexProfile, findings: list[Finding], setting: str, *, dropped: bool = False
+) -> None:
+    """``dropped``: rows without text are left out of the target rather than kept empty."""
+    if profile.text_field is None:
+        findings.append(
+            Finding(
+                "plan.no_text",
+                Severity.ERROR,
+                "No source text to embed",
+                "No text was found next to the vectors, so there's nothing to re-embed.",
+                hint=f"{setting} in the job file if the text has an unusual name.",
+            )
+        )
+    elif (
+        profile.sample.texts_present is not None
+        and profile.sample.texts_present < profile.sample.rows
+    ):
+        missing = profile.sample.rows - profile.sample.texts_present
+        lost = (
+            "They aren't copied to the new collection, so they're gone after cutover."
+            if dropped
+            else "Their new vector stays empty, so search won't find them after cutover."
+        )
+        findings.append(
+            Finding(
+                "plan.partial_text",
+                Severity.WARNING,
+                "Some rows have no text",
+                f"{missing:,} of {profile.sample.rows:,} sampled rows have no text in "
+                f"`{profile.text_field}`. {lost}",
+            )
+        )
+
+
+def same_model_findings(spec: ModelSpec, profile: IndexProfile, findings: list[Finding]) -> None:
+    recorded = set(profile.sample.models)
+    lowered = {m.lower() for m in recorded}
+    tag_prefix = f"{spec.provider}/{spec.model}@".lower()
+    same = spec.model in recorded or spec.base_model in lowered
+    same = same or any(m.startswith(tag_prefix) for m in lowered)
+    if len(recorded) == 1 and same:
+        findings.append(
+            Finding(
+                "plan.same_model",
+                Severity.WARNING,
+                "The table already uses this model",
+                f"Rows record `{next(iter(recorded))}` in `{profile.model_field}`, the same "
+                "model this job would switch to.",
+                hint="Check the model in the job file. Re-embedding with the same model "
+                "only makes sense to change dims= or the prefixes.",
+            )
+        )
+
+
+def estimate(
+    job: JobSpec,
+    spec: ModelSpec,
+    profile: IndexProfile,
+    sample: SampleStats,
+    probe: ProbeResult | None,
+    bytes_per_vector: int | None,
+    index_bytes_per_row: int | None = None,
+) -> Estimates:
+    """Rows, tokens, cost, duration, and storage for embedding the source."""
+    est = Estimates()
+    share = (
+        (profile.sample.texts_present or 0) / profile.sample.rows if profile.sample.rows else 0.0
+    )
+    if profile.estimated_rows is not None:
+        est.rows = round(profile.estimated_rows * share)
+        est.rows_exact = profile.sample.method in {"full table", "full collection"}
+    if est.rows is not None:
+        tokens_per_char = probe.tokens_per_char if probe else 1 / CHARS_PER_TOKEN
+        est.tokens = round(est.rows * sample.average_chars * tokens_per_char)
+        est.tokens_method = (
+            f"measured on {probe.documents} documents"
+            if probe
+            else f"about {CHARS_PER_TOKEN:g} characters per token"
+        )
+        est.requests = math.ceil(est.rows / spec.batch_size) if est.rows else 0
+        if spec.price is not None:
+            est.cost_usd = est.tokens * spec.price / 1_000_000
+
+        durations: list[tuple[float, str]] = []
+        if job.limits.tokens_per_minute:
+            durations.append(
+                (60 * est.tokens / job.limits.tokens_per_minute, "your tokens-per-minute limit")
+            )
+        if job.limits.requests_per_minute:
+            durations.append(
+                (
+                    60 * est.requests / job.limits.requests_per_minute,
+                    "your requests-per-minute limit",
+                )
+            )
+        if probe and probe.docs_per_second > 0:
+            durations.append((est.rows / probe.docs_per_second, "speed measured by the probe"))
+        if durations:
+            est.seconds, est.seconds_method = max(durations)
+
+        if bytes_per_vector:
+            est.new_bytes = est.rows * bytes_per_vector
+            if index_bytes_per_row is not None:
+                est.index_memory_bytes = est.rows * (bytes_per_vector + index_bytes_per_row)
+
+    old_dims = profile.declared_dimensions or (
+        profile.sample.dimensions.most_common(1)[0][0] if profile.sample.dimensions else None
+    )
+    if old_dims and profile.estimated_rows is not None:
+        with_vectors = profile.sample.vectors / profile.sample.rows if profile.sample.rows else 0
+        est.old_bytes = round(
+            profile.estimated_rows * with_vectors * _bytes_per_vector(profile.vector_type, old_dims)
+        )
+    return est
+
+
+def budget_findings(job: JobSpec, spec: ModelSpec, est: Estimates, findings: list[Finding]) -> None:
+    if job.limits.budget_usd is not None and est.cost_usd is not None:
+        if est.cost_usd > job.limits.budget_usd:
+            findings.append(
+                Finding(
+                    "plan.over_budget",
+                    Severity.ERROR,
+                    "Estimated cost is over budget",
+                    f"Embedding is estimated at ${est.cost_usd:,.2f}, above the "
+                    f"${job.limits.budget_usd:,.2f} budget.",
+                    hint="Raise limits.budget_usd, or use a cheaper model or fewer dims.",
+                )
+            )
+    elif est.cost_usd and job.limits.budget_usd is None:
+        findings.append(
+            Finding(
+                "plan.no_budget",
+                Severity.INFO,
+                "No budget set",
+                "Without limits.budget_usd, nothing stops a run that costs more than expected.",
+                hint=f"Add limits.budget_usd, for example {max(1, math.ceil(est.cost_usd * 1.5))}.",
+            )
+        )
+    if spec.price is None:
+        findings.append(
+            Finding(
+                "plan.cost_unknown",
+                Severity.INFO,
+                "Cost unknown",
+                f"There's no price for {spec.name}, so the plan can't estimate cost or "
+                "enforce a budget.",
+                hint="Add price= (USD per million tokens) to the model spec.",
+            )
+        )
+
+
+def dims_unknown(spec: ModelSpec, findings: list[Finding], what: str = "column") -> None:
+    findings.append(
+        Finding(
+            "plan.dims_unknown",
+            Severity.WARNING,
+            "Vector size unknown",
+            f"vecshift doesn't know how many dimensions {spec.name} produces, so it can't "
+            f"size the new {what} or estimate storage.",
+            hint="Add dims= to the model spec, or run plan with --probe to measure it.",
+        )
+    )
+
+
 def build_plan(
     job: JobSpec,
     profile: IndexProfile,
@@ -122,7 +288,7 @@ def build_plan(
     probe: ProbeResult | None = None,
 ) -> Plan:
     spec = parse_spec(job.model)
-    vector_type = job.target.vector_type.value
+    vector_type = job.pg_target.vector_type.value
     dims, dims_source = _resolve_dimensions(spec, probe)
     metric = _metric(job, profile)
     findings: list[Finding] = []
@@ -133,7 +299,7 @@ def build_plan(
     plan = Plan(
         job=job.name,
         source=f"{profile.target} {source_type}{rows_known}",
-        target_column=job.target.column,
+        target_column=job.pg_target.column,
         model=spec.name,
         dimensions=dims,
         dimensions_source=dims_source,
@@ -142,31 +308,7 @@ def build_plan(
     )
 
     # --- The source has to be re-embeddable and addressable.
-    if profile.text_field is None:
-        findings.append(
-            Finding(
-                "plan.no_text",
-                Severity.ERROR,
-                "No source text to embed",
-                "No text column was found next to the vectors, so there's nothing to re-embed.",
-                hint="Set source.text_column in the job file if the text has an unusual name.",
-            )
-        )
-    elif (
-        profile.sample.texts_present is not None
-        and profile.sample.texts_present < profile.sample.rows
-    ):
-        missing = profile.sample.rows - profile.sample.texts_present
-        findings.append(
-            Finding(
-                "plan.partial_text",
-                Severity.WARNING,
-                "Some rows have no text",
-                f"{missing:,} of {profile.sample.rows:,} sampled rows have no text in "
-                f"`{profile.text_field}`. Their new vector stays empty, so search won't find "
-                "them after cutover.",
-            )
-        )
+    text_findings(profile, findings, "Set source.text_column")
     if not profile.has_primary_key:
         findings.append(
             Finding(
@@ -248,7 +390,7 @@ def build_plan(
                     "plan.column_exists",
                     Severity.INFO,
                     "Target column already exists",
-                    f"`{job.target.column}` is already a matching `{vector_type}` column, so "
+                    f"`{job.pg_target.column}` is already a matching `{vector_type}` column, so "
                     "apply will fill in the rows it's missing.",
                 )
             )
@@ -260,7 +402,7 @@ def build_plan(
                     "plan.column_conflict",
                     Severity.ERROR,
                     "Target column exists with a different type",
-                    f"`{job.target.column}` is `{have}`, but this job needs `{want}`.",
+                    f"`{job.pg_target.column}` is `{have}`, but this job needs `{want}`.",
                     hint="Pick another target.column, or drop the existing one if it's unused.",
                 )
             )
@@ -268,36 +410,11 @@ def build_plan(
     # --- The model.
     _model_findings(spec, findings)
     if dims is None:
-        findings.append(
-            Finding(
-                "plan.dims_unknown",
-                Severity.WARNING,
-                "Vector size unknown",
-                f"vecshift doesn't know how many dimensions {spec.name} produces, so it can't "
-                "size the new column or estimate storage.",
-                hint="Add dims= to the model spec, or run plan with --probe to measure it.",
-            )
-        )
-    recorded = set(profile.sample.models)
-    lowered = {m.lower() for m in recorded}
-    tag_prefix = f"{spec.provider}/{spec.model}@".lower()
-    same = spec.model in recorded or spec.base_model in lowered
-    same = same or any(m.startswith(tag_prefix) for m in lowered)
-    if len(recorded) == 1 and same:
-        findings.append(
-            Finding(
-                "plan.same_model",
-                Severity.WARNING,
-                "The table already uses this model",
-                f"Rows record `{next(iter(recorded))}` in `{profile.model_field}`, the same "
-                "model this job would switch to.",
-                hint="Check the model in the job file. Re-embedding with the same model "
-                "only makes sense to change dims= or the prefixes.",
-            )
-        )
+        dims_unknown(spec, findings)
+    same_model_findings(spec, profile, findings)
 
     limit = MAX_INDEXABLE_DIMENSIONS.get(vector_type)
-    if dims and limit and dims > limit and job.target.index is not IndexMethod.NONE:
+    if dims and limit and dims > limit and job.pg_target.index is not IndexMethod.NONE:
         halfvec_ok = vector_type == "vector" and dims <= MAX_INDEXABLE_DIMENSIONS["halfvec"]
         findings.append(
             Finding(
@@ -320,91 +437,19 @@ def build_plan(
             findings.append(finding)
 
     # --- Estimates.
-    est = Estimates(maintenance_work_mem=target.maintenance_work_mem)
-    share = (
-        (profile.sample.texts_present or 0) / profile.sample.rows if profile.sample.rows else 0.0
+    hnsw = job.pg_target.index is IndexMethod.HNSW
+    est = estimate(
+        job,
+        spec,
+        profile,
+        sample,
+        probe,
+        _bytes_per_vector(vector_type, dims) if dims else None,
+        HNSW_BYTES_PER_ELEMENT if hnsw else None,
     )
-    if profile.estimated_rows is not None:
-        est.rows = round(profile.estimated_rows * share)
-        est.rows_exact = profile.sample.method == "full table"
-    if est.rows is not None:
-        tokens_per_char = probe.tokens_per_char if probe else 1 / CHARS_PER_TOKEN
-        est.tokens = round(est.rows * sample.average_chars * tokens_per_char)
-        est.tokens_method = (
-            f"measured on {probe.documents} documents"
-            if probe
-            else f"about {CHARS_PER_TOKEN:g} characters per token"
-        )
-        est.requests = math.ceil(est.rows / spec.batch_size) if est.rows else 0
-        if spec.price is not None:
-            est.cost_usd = est.tokens * spec.price / 1_000_000
-
-        durations: list[tuple[float, str]] = []
-        if job.limits.tokens_per_minute:
-            durations.append(
-                (60 * est.tokens / job.limits.tokens_per_minute, "your tokens-per-minute limit")
-            )
-        if job.limits.requests_per_minute:
-            durations.append(
-                (
-                    60 * est.requests / job.limits.requests_per_minute,
-                    "your requests-per-minute limit",
-                )
-            )
-        if probe and probe.docs_per_second > 0:
-            durations.append((est.rows / probe.docs_per_second, "speed measured by the probe"))
-        if durations:
-            est.seconds, est.seconds_method = max(durations)
-
-        if dims:
-            per_vector = _bytes_per_vector(vector_type, dims)
-            est.new_bytes = est.rows * per_vector
-            if job.target.index is IndexMethod.HNSW:
-                est.index_memory_bytes = est.rows * (per_vector + HNSW_BYTES_PER_ELEMENT)
-
-    old_dims = profile.declared_dimensions or (
-        profile.sample.dimensions.most_common(1)[0][0] if profile.sample.dimensions else None
-    )
-    if old_dims and profile.estimated_rows is not None:
-        with_vectors = profile.sample.vectors / profile.sample.rows if profile.sample.rows else 0
-        est.old_bytes = round(
-            profile.estimated_rows * with_vectors * _bytes_per_vector(profile.vector_type, old_dims)
-        )
+    est.maintenance_work_mem = target.maintenance_work_mem
     plan.estimates = est
-
-    if job.limits.budget_usd is not None and est.cost_usd is not None:
-        if est.cost_usd > job.limits.budget_usd:
-            findings.append(
-                Finding(
-                    "plan.over_budget",
-                    Severity.ERROR,
-                    "Estimated cost is over budget",
-                    f"Embedding is estimated at ${est.cost_usd:,.2f}, above the "
-                    f"${job.limits.budget_usd:,.2f} budget.",
-                    hint="Raise limits.budget_usd, or use a cheaper model or fewer dims.",
-                )
-            )
-    elif est.cost_usd and job.limits.budget_usd is None:
-        findings.append(
-            Finding(
-                "plan.no_budget",
-                Severity.INFO,
-                "No budget set",
-                "Without limits.budget_usd, nothing stops a run that costs more than expected.",
-                hint=f"Add limits.budget_usd, for example {max(1, math.ceil(est.cost_usd * 1.5))}.",
-            )
-        )
-    if spec.price is None:
-        findings.append(
-            Finding(
-                "plan.cost_unknown",
-                Severity.INFO,
-                "Cost unknown",
-                f"There's no price for {spec.name}, so the plan can't estimate cost or "
-                "enforce a budget.",
-                hint="Add price= (USD per million tokens) to the model spec.",
-            )
-        )
+    budget_findings(job, spec, est, findings)
     if (
         est.index_memory_bytes
         and target.maintenance_work_mem
@@ -432,8 +477,8 @@ def build_plan(
             Change(
                 "add_column",
                 f"add column {target.source.schema}.{target.source.table}."
-                f"{job.target.column} {vector_type}({dims})",
-                add_column_sql(target, job.target.column, vector_type, dims),
+                f"{job.pg_target.column} {vector_type}({dims})",
+                add_column_sql(target, job.pg_target.column, vector_type, dims),
                 "Instant for any table size: a nullable column without a default doesn't "
                 "rewrite rows. It takes a brief exclusive lock.",
             )
@@ -442,7 +487,8 @@ def build_plan(
         plan.changes.append(
             Change(
                 "trigger",
-                f"add a trigger that clears {job.target.column} when {profile.text_field} changes",
+                f"add a trigger that clears {job.pg_target.column} when "
+                f"{profile.text_field} changes",
                 note="So rows edited during the migration get re-embedded. Cutover moves it to "
                 "the old column, and cleanup removes it.",
             )
@@ -456,16 +502,16 @@ def build_plan(
             "any time to catch up rows added or changed since.",
         )
     )
-    if job.target.index is not IndexMethod.NONE and dims:
+    if job.pg_target.index is not IndexMethod.NONE and dims:
         plan.changes.append(
             Change(
                 "index",
-                f"build a {job.target.index.value} index ({metric}) on {job.target.column}",
+                f"build a {job.pg_target.index.value} index ({metric}) on {job.pg_target.column}",
                 index_sql(
                     target,
-                    job.target.column,
+                    job.pg_target.column,
                     vector_type,
-                    job.target.index.value,
+                    job.pg_target.index.value,
                     metric,
                     est.rows or 0,
                 ),
@@ -476,7 +522,7 @@ def build_plan(
     plan.changes.append(
         Change(
             "cutover",
-            f"later, with vecshift cutover: {old} → {old}_old, {job.target.column} → {old}",
+            f"later, with vecshift cutover: {old} → {old}_old, {job.pg_target.column} → {old}",
             note="Renames in one transaction, so searches switch atomically and your SQL keeps "
             "working. Rollback renames them back; cleanup drops the old column.",
         )

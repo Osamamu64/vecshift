@@ -153,3 +153,18 @@ def connect_writer(settings: ConnectionSettings) -> psycopg.Connection:
     except psycopg.OperationalError as exc:
         message = str(exc).strip().splitlines()[0] if str(exc).strip() else "Connection failed."
         raise ConnectError(message, hint=_hint_for(settings, str(exc))) from exc
+
+
+def connect_reader(settings: ConnectionSettings) -> psycopg.Connection:
+    """An autocommit, read-only connection for reading a table page by page.
+
+    Each read runs in its own short read-only transaction, so a long migration never holds
+    a snapshot open. Unlike apply's writer, this works through a transaction pooler.
+    """
+    try:
+        conn = psycopg.connect(settings.conninfo, prepare_threshold=None, autocommit=True)
+    except psycopg.OperationalError as exc:
+        message = str(exc).strip().splitlines()[0] if str(exc).strip() else "Connection failed."
+        raise ConnectError(message, hint=_hint_for(settings, str(exc))) from exc
+    conn.read_only = True
+    return conn
