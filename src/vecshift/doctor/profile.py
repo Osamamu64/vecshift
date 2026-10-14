@@ -67,3 +67,6 @@ class IndexProfile:
     """The most dimensions the store can put in an ANN index, if it has a limit."""
     rows_hidden_by_access_rules: bool = False
     """Row-level security (or similar) may hide rows from the connecting role."""
+    aliases: tuple[str, ...] | None = None
+    """Aliases that point at this collection, for stores that switch by alias; ``None``
+    where aliases don't apply."""
