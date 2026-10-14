@@ -217,7 +217,8 @@ vecshift plan && vecshift apply && vecshift eval && vecshift cutover
 ```
 
 For a pgvector table, keep `source: {table: ...}` and set `target: {type: qdrant, alias:
-documents}`. See [Migrating into Qdrant](docs/connectors/qdrant.md#migrating-into-qdrant).
+documents}`, or let `vecshift init` write the job for you. See
+[Migrating into Qdrant](docs/connectors/qdrant.md#migrating-into-qdrant).
 
 #### Tested at scale
 
@@ -255,6 +256,7 @@ produces a different tag, because it's a different vector space.
 - [pgvector and Supabase](docs/connectors/pgvector.md): connecting, what `doctor` checks, and safety
 - [Qdrant](docs/connectors/qdrant.md): connecting, aliases, what `doctor` checks, and
   migrating into Qdrant
+- [JSON output](docs/json.md): what each command's `--json` prints, for scripts and CI
 - [Architecture](docs/architecture.md): the canonical record, plugin contracts, and capability flags
 - [Roadmap](docs/roadmap.md): what's being built, in what order, and why
 - [Security model](docs/security.md): what vecshift sends, stores, and touches

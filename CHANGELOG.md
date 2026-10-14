@@ -15,6 +15,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   if you say yes). It finds the vectors, uses the alias the application searches, or asks
   for one for cutover to create, and detects the text payload field. `--alias` sets the
   alias cutover points at the new collection.
+- `docs/json.md` describes the `--json` output of every command, which the planned REST
+  API will return too. Tests pin each output's shape in `tests/contracts/`, so a change to
+  it can't slip in unnoticed.
 
 ### Changed
 
