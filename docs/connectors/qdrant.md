@@ -143,6 +143,11 @@ vecshift rollback         # points it back
 vecshift cleanup          # deletes the old collection, when you're sure
 ```
 
+`apply` only ever fills a collection it created itself. If `target.collection` already
+exists and this job didn't create it, `plan` and `apply` stop rather than overwrite its
+points. The record of which collections a job created, and of its cutovers, is in
+`.vecshift/` next to the job file; run later commands from the same folder.
+
 Run `apply` again at any time to catch up. The new collection itself is the record of
 progress: a point is (re-)embedded when it's missing there or its text differs from the
 source, a payload-only edit is copied without calling the model, and points deleted from
@@ -178,6 +183,9 @@ added or edited in the new collection since cutover, which the old one doesn't h
 `cleanup` deletes the old collection once you're sure. It asks you to type its name, and
 refuses while any alias still points at it. Rollback isn't possible after cleanup.
 
+Rollback and cleanup only act on a collection named in this job's own cutover record. If
+the folder has no record (you cut over from somewhere else), they stop rather than guess.
+
 ### What `plan` checks for Qdrant
 
 | Finding | Severity | Meaning |
@@ -185,7 +193,9 @@ refuses while any alias still points at it. Rollback isn't possible after cleanu
 | `plan.no_alias` | warning | Nothing to switch at cutover: set `target.alias` |
 | `plan.alias_conflict` | error | The alias name is already a collection's |
 | `plan.target_is_source` | error | `target.collection` is the collection being replaced |
-| `plan.collection_exists` | info | The new collection exists with matching vectors; apply fills the gaps |
+| `plan.collection_not_ours` | error | `target.collection` exists, and this job didn't create it |
+| `plan.collection_is_alias` | error | `target.collection` is already an alias's name |
+| `plan.collection_exists` | info | This job's collection exists with matching vectors; apply fills the gaps |
 | `plan.collection_conflict` | error | It exists with a different size or distance |
 | `plan.cut_over` | error | The alias already points at the new collection |
 | `plan.other_vectors` | error | The source has more vectors than the one being replaced, which a copy would drop |

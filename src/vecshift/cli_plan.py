@@ -459,6 +459,12 @@ def prepare_qdrant(
     except pgvector.TargetSelectionError as exc:
         raise _fail(str(exc)) from exc
 
+    from dataclasses import replace
+
+    from vecshift.migrate import JobState
+
+    created = JobState.for_job(job_file, job.name).collections
+    target = replace(target, owned=target.collection in created)
     stats, measured = _measure(spec, texts, probe=probe, yes=yes)
     result = build_qdrant_plan(job, profile, target, stats, measured, pg)
     return QdrantPrepared(

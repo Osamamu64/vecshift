@@ -160,13 +160,63 @@ def test_uuid_ids_page_in_order() -> None:
     assert source.count() == 9
 
 
+def test_never_takes_over_a_collection_it_didnt_create(tmp_path: Path) -> None:
+    fake, writer = setup()
+    unrelated = [{"id": 1, "vector": [0.0] * 8, "payload": {"x": 1}}, *points(3, start=100)]
+    fake.add("docs_v2", {"size": 8, "distance": "Cosine"}, unrelated)
+    with pytest.raises(QdrantError, match="didn't create it"):
+        writer.ensure_column()
+    with pytest.raises(QdrantError, match="Won't delete"):
+        writer.remove_deleted()
+    with pytest.raises(QdrantError, match="didn't create it"):
+        run(writer, tmp_path)
+    assert {p["id"] for p in fake.points["docs_v2"]} == {1, 100, 101, 102}
+    assert fake.points["docs_v2"][0]["payload"] == {"x": 1}, "nothing overwritten"
+
+
 def test_existing_collection_must_match(tmp_path: Path) -> None:
     fake, writer = setup()
+    writer.owned.add("docs_v2")
     fake.add("docs_v2", {"size": 3, "distance": "Cosine"}, [])
     with pytest.raises(QdrantError, match="different vector size"):
         writer.ensure_column()
     fake.add("docs_v2", {"size": 8, "distance": "Cosine"}, [])
     assert writer.ensure_column() is False
+
+
+def test_creating_records_ownership(tmp_path: Path) -> None:
+    _, writer = setup()
+    made: list[str] = []
+    writer.on_create = made.append
+    assert writer.ensure_column() is True and made == ["docs_v2"]
+
+
+def test_payload_copies_only_while_filling(tmp_path: Path) -> None:
+    fake, writer = setup()
+    run(writer, tmp_path)
+    fake.points["docs_v1"][0]["payload"] = {"page_content": "text 1", "lang": "de"}
+    writer.payloads_copied = 0
+    assert writer.pending_count() == 0
+    assert copy(fake)[1]["payload"]["lang"] == "en", "counting never writes"
+    writer.fetch(None, 10)
+    assert copy(fake)[1]["payload"]["lang"] == "de" and writer.payloads_copied == 1
+
+
+@pytest.mark.parametrize(
+    ("a", "b", "same"),
+    [
+        (10**20, 1e20, True),
+        ({"n": [1, {"x": 2}]}, {"n": [1.0, {"x": 2.0}]}, True),
+        (1, True, False),
+        (10**400, 1e300, False),
+        ({"a": 1}, {"a": 1, "b": None}, False),
+        ("1", 1, False),
+    ],
+)
+def test_payloads_compare_as_json(a: Any, b: Any, same: bool) -> None:
+    from vecshift.connectors.qdrant.writer import same_payload
+
+    assert same_payload(a, b) is same
 
 
 def test_named_vector(tmp_path: Path) -> None:
@@ -216,7 +266,7 @@ def test_waits_for_indexing() -> None:
     [
         (7, 7),
         (uuid.UUID(int=5), str(uuid.UUID(int=5))),
-        ("6F1F4B38-7C4C-4F62-9B39-5C8D5E5D6A01", "6f1f4b38-7c4c-4f62-9b39-5c8d5e5d6a01"),
+        ("6f1f4b38-7c4c-4f62-9b39-5c8d5e5d6a01", "6f1f4b38-7c4c-4f62-9b39-5c8d5e5d6a01"),
     ],
 )
 def test_point_ids(key: Any, expected: Any) -> None:
@@ -224,7 +274,9 @@ def test_point_ids(key: Any, expected: Any) -> None:
 
 
 def test_other_keys_get_stable_uuids() -> None:
-    for key in ("doc-1", -3, True):
+    upper = "6F1F4B38-7C4C-4F62-9B39-5C8D5E5D6A01"
+    assert point_id(upper) != point_id(upper.lower()), "different keys, different points"
+    for key in ("doc-1", -3, True, upper):
         made = point_id(key)
         assert isinstance(made, str) and uuid.UUID(made).version == 5
         assert point_id(key) == made
@@ -325,9 +377,13 @@ def test_qdrant_plan_problems() -> None:
     assert found(qplan(s=direct))["plan.target_is_source"] is Severity.ERROR
     assert found(qplan(s=state(collection="docs_v1")))["plan.cut_over"] is Severity.ERROR
     assert found(qplan(s=state(alias_target="docs_v2")))["plan.cut_over"] is Severity.ERROR
-    conflict = state(exists=True, dimensions=3, distance="Dot")
+    conflict = state(exists=True, owned=True, dimensions=3, distance="Dot")
     assert found(qplan(s=conflict))["plan.collection_conflict"] is Severity.ERROR
-    same = state(exists=True, dimensions=768, distance="Dot")
+    foreign = state(exists=True, dimensions=768, distance="Dot")
+    assert found(qplan(s=foreign))["plan.collection_not_ours"] is Severity.ERROR
+    named = state(name_is_alias=True)
+    assert found(qplan(s=named))["plan.collection_is_alias"] is Severity.ERROR
+    same = state(exists=True, owned=True, dimensions=768, distance="Dot")
     assert found(qplan(s=same))["plan.collection_exists"] is Severity.INFO
     assert "create_collection" not in [c.kind for c in qplan(s=same).changes]
     alone = qplan(s=state(alias=None, alias_target=None, source_is_alias=False))

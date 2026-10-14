@@ -340,7 +340,22 @@ def _qdrant_group(points: list[dict[str, Any]], option: str | None) -> str | Non
     return None
 
 
-def _setup_qdrant(job_file: Path, group_by: str | None) -> _Setup:
+def _store_error(exc: Exception) -> Exception:
+    """A Qdrant or database error as a clean message; anything else unchanged."""
+    import psycopg
+
+    from vecshift.connectors.qdrant import QdrantError
+
+    if isinstance(exc, QdrantError):
+        return _fail(str(exc), exc.hint or "eval only reads; run it again.")
+    if isinstance(exc, psycopg.Error):
+        text = str(exc).strip()
+        detail = text.splitlines()[0] if text else type(exc).__name__
+        return _fail(f"The database reported an error: {detail}", "eval only reads; run it again.")
+    return exc
+
+
+def _setup_qdrant(job_file: Path, group_by: str | None, dsn_env: str | None = None) -> _Setup:
     """Old and new vectors of a migration into Qdrant, before or after cutover."""
     from vecshift import cli_qdrant
     from vecshift.cli_plan import pg_settings
@@ -350,7 +365,7 @@ def _setup_qdrant(job_file: Path, group_by: str | None) -> _Setup:
     from vecshift.connectors.qdrant.writer import QdrantSource, QdrantWriter
     from vecshift.jobs.spec import QdrantSource as QdrantSourceSpec
 
-    found = cli_qdrant.locate(job_file)
+    found = cli_qdrant.locate(job_file, dsn_env)
     closers: list[Any] = [found.close]
 
     def close() -> None:
@@ -409,7 +424,7 @@ def _setup_qdrant(job_file: Path, group_by: str | None) -> _Setup:
             def to_point(key: str) -> int | str:
                 return point_id(int(key)) if numeric else point_id(key)
 
-            settings = pg_settings(found.job.pg_source.dsn_env)
+            settings = pg_settings(dsn_env or found.job.pg_source.dsn_env)
             prepared = _setup_pg_source(found, settings)
             conn, target, live, kind, metric = prepared
             closers.append(conn.close)
@@ -440,6 +455,9 @@ def _setup_qdrant(job_file: Path, group_by: str | None) -> _Setup:
                 "rows",
             )
         searcher = SplitSearcher(rows, {"old": old_side, "new": new_side})
+    except Exception as exc:
+        close()
+        raise _store_error(exc) from exc
     except BaseException:
         close()
         raise
@@ -559,7 +577,7 @@ def eval_(
     if cross_language and generator is None:
         raise _fail("--cross-language needs --generate-queries.")
     if cli_qdrant.into_qdrant(job_file):
-        setup = _setup_qdrant(job_file, group_by)
+        setup = _setup_qdrant(job_file, group_by, dsn_env)
     else:
         setup = _setup_pg(job_file, dsn_env, group_by)
     job, spec, searcher, text = setup.job, setup.spec, setup.searcher, setup.text
@@ -613,6 +631,8 @@ def eval_(
                 on_step=(lambda s: None) if output_json else progress.step,
             )
         )
+    except Exception as exc:
+        raise _store_error(exc) from exc
     finally:
         progress.stop()
         setup.close()

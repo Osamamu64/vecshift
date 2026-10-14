@@ -42,6 +42,8 @@ class Located:
     text_field: str
     vector: str | None
     from_qdrant: bool
+    same_server: bool = True
+    """Whether a Qdrant source is on the target's server, so old and new can be compared."""
     closers: list[Any] = field(default_factory=list)
 
     @property
@@ -67,12 +69,24 @@ def into_qdrant(job_file: Path) -> bool:
     return read_job(job_file).target.type == "qdrant"
 
 
-def locate(job_file: Path) -> Located:
+def history(state: JobState, alias: str | None, new: str) -> list[dict[str, str]]:
+    """This migration's events: other jobs can share a state file (same ``name``)."""
+    return [
+        h
+        for h in state.history
+        if h.get("store") == "qdrant" and h.get("alias") == (alias or "") and h.get("new") == new
+    ]
+
+
+def locate(job_file: Path, dsn_env: str | None = None) -> Located:
     """The new collection, the source to catch up from, and the alias, as they are now.
 
-    Before cutover the old collection is what the source names; after it, the alias names
-    the new collection, so the old one comes from the job's history.
+    ``previous`` is the collection the alias named before cutover, on the target server.
+    Before cutover that's whatever the alias names now; after it, the alias names the new
+    collection, so it comes from this migration's own history, or is unknown.
     """
+    import psycopg
+
     from vecshift.cli_plan import _pg_source, pg_settings, qdrant_settings, read_job
     from vecshift.connectors import pgvector, qdrant
     from vecshift.connectors.qdrant.inspect import _fields
@@ -88,49 +102,65 @@ def locate(job_file: Path) -> Located:
     target = job.qdrant_target
     settings = qdrant_settings(job.target_url_env, job.target_key_env)
     closers: list[Any] = []
+
+    def close() -> None:
+        for fn in reversed(closers):
+            fn()
+
     try:
         client = qdrant.QdrantClient(settings)
         closers.append(client.close)
         aliases = dict(client.aliases())
         new = job.target_collection
-        last_cutover = next(
-            (h for h in reversed(state.history) if h.get("event") == "cutover"), None
-        )
+        same_server = True
+        if isinstance(job.source, QdrantSourceSpec):
+            src = job.source
+            same_server = (src.url_env, src.key_env) == (job.target_url_env, job.target_key_env)
+            alias = target.alias or (
+                src.collection if same_server and src.collection in aliases else None
+            )
+        else:
+            alias = target.alias
+        if alias and aliases.get(alias) == new:
+            cutovers = [h for h in history(state, alias, new) if h.get("event") == "cutover"]
+            previous = (cutovers[-1].get("previous") or None) if cutovers else None
+        else:
+            previous = aliases.get(alias) if alias else None
+        if previous == new:
+            previous = None
+
         source: Any
         if isinstance(job.source, QdrantSourceSpec):
             src = job.source
             reader = client
-            same_server = (src.url_env, src.key_env) == (job.target_url_env, job.target_key_env)
             if not same_server:
                 reader = qdrant.QdrantClient(qdrant_settings(src.url_env, src.key_env))
                 closers.append(reader.close)
-            alias = target.alias or (
-                src.collection if same_server and src.collection in aliases else None
-            )
-            if alias and aliases.get(alias) == new and last_cutover:
-                previous: str | None = last_cutover.get("previous")
-            else:
-                previous = dict(reader.aliases()).get(src.collection, src.collection)
-            if previous is None:
-                raise _fail("The job's history doesn't say which collection came before.")
-            field_, _ = qdrant.select_field(reader, previous, src.vector)
+            # The collection to copy from: on this server, the one the alias named before
+            # cutover; on another server, whatever the source names there.
+            origin = previous if same_server and alias and aliases.get(alias) == new else None
+            if origin is None:
+                origin = dict(reader.aliases()).get(src.collection, src.collection)
+            if origin == new:
+                raise _fail(
+                    f"The source {src.collection} now names the new collection {new}, and "
+                    "this folder has no record of the collection before it.",
+                    "Run vecshift from the folder where you ran cutover (its record is in "
+                    ".vecshift/).",
+                )
+            field_, _ = qdrant.select_field(reader, origin, src.vector)
             vector = target.vector or field_.name
             text = src.text_field
             if text is None:
-                profile = qdrant.inspect(reader, previous, src.vector, None, 50)
+                profile = qdrant.inspect(reader, origin, src.vector, None, 50)
                 text = (profile.text_field or "").removeprefix("payload.")
             if not text:
                 raise _fail("No text payload field found.", "Set source.text_field.")
-            source = QdrantSource(reader, previous, text, None)
+            source = QdrantSource(reader, origin, text, None)
         else:
             from vecshift.connectors.pgvector.reader import PgSource
 
-            alias = target.alias
-            if alias and aliases.get(alias) == new and last_cutover:
-                previous = last_cutover.get("previous")
-            else:
-                previous = aliases.get(alias) if alias else None
-            pg = pg_settings(job.pg_source.dsn_env)
+            pg = pg_settings(dsn_env or job.pg_source.dsn_env)
             profile, table, _ = _pg_source(job, pg, 50)
             text = profile.text_field or ""
             if not text or len(table.primary_key) != 1:
@@ -151,20 +181,26 @@ def locate(job_file: Path) -> Located:
                 dims = found[0].dimensions or dims
                 distance = found[0].distance or distance
         layout = Layout(new, vector, dims, distance)
-        lock = state.path.with_suffix(".lock")
-        writer = QdrantWriter(client, source, layout, lock)
+        writer = QdrantWriter(
+            client,
+            source,
+            layout,
+            state.path.with_suffix(".lock"),
+            owned=state.collections,
+            on_create=lambda name: _owns(state, name),
+        )
         switch = QdrantSwitch(client, writer, alias, previous)
     except qdrant.QdrantError as exc:
-        for close in reversed(closers):
-            close()
+        close()
         raise _fail(str(exc), exc.hint) from exc
     except (pgvector.ConnectError, pgvector.TargetSelectionError) as exc:
-        for close in reversed(closers):
-            close()
+        close()
         raise _fail(str(exc), getattr(exc, "hint", None)) from exc
+    except psycopg.Error as exc:
+        close()
+        raise _fail(f"The database reported an error: {_first_line(exc)}") from exc
     except BaseException:
-        for close in reversed(closers):
-            close()
+        close()
         raise
     return Located(
         job=job,
@@ -176,8 +212,20 @@ def locate(job_file: Path) -> Located:
         text_field=text,
         vector=vector,
         from_qdrant=isinstance(job.source, QdrantSourceSpec),
+        same_server=same_server,
         closers=closers,
     )
+
+
+def _first_line(exc: BaseException) -> str:
+    text = str(exc).strip()
+    return text.splitlines()[0] if text else type(exc).__name__
+
+
+def _owns(state: JobState, collection: str) -> None:
+    if collection not in state.collections:
+        state.collections.append(collection)
+        state.save()
 
 
 def _record(found: Located, event: str) -> None:
@@ -209,8 +257,9 @@ def _guarded(found: Located, run: Any) -> Any:
     except (QdrantError, EmbeddingError) as exc:
         raise _fail(str(exc), getattr(exc, "hint", None) or "Nothing was switched.") from exc
     except psycopg.Error as exc:
-        detail = str(exc).strip().splitlines()[0] if str(exc).strip() else type(exc).__name__
-        raise _fail(f"The database reported an error: {detail}", "Nothing was switched.") from exc
+        raise _fail(
+            f"The database reported an error: {_first_line(exc)}", "Nothing was switched."
+        ) from exc
     finally:
         found.close()
 
@@ -239,7 +288,8 @@ def _catch_up(found: Located) -> tuple[int, int]:
     if result.status not in {"complete", "stopped"}:
         raise _fail(f"The final catch-up stopped: {result.message}", "Nothing was switched.")
     found.writer.remove_deleted()
-    return result.rows_written, result.remaining
+    # Count again after deleting: the switch must never leave searches short of points.
+    return result.rows_written, found.writer.pending_count(tuple(found.state.failed))
 
 
 def _differences(found: Located, source: str, target: str) -> int:
@@ -311,7 +361,7 @@ def cutover(
             _record(found, "cutover")
             late = (
                 _differences(found, found.previous, found.new)
-                if found.from_qdrant and found.previous
+                if found.from_qdrant and found.same_server and found.previous
                 else 0
             )
             return {"status": "cut_over", "readiness": ready, "caught_up": caught_up, "late": late}
@@ -383,12 +433,24 @@ def rollback(job_file: Path, *, yes: bool, output_json: bool) -> None:
                     f"The alias {found.alias or '(none)'} doesn't point at {found.new}.",
                 )
             previous = found.previous
+            recorded = [
+                h
+                for h in history(found.state, found.alias, found.new)
+                if h.get("event") == "cutover"
+            ]
+            if not previous and not recorded:
+                raise _fail(
+                    "This folder has no record of the cutover, so vecshift doesn't know "
+                    "which collection to point the alias back at.",
+                    "Run rollback from the folder where you ran cutover (its record is in "
+                    ".vecshift/), or move the alias yourself.",
+                )
             if not previous:
                 raise _fail(
                     "Before cutover the alias didn't exist, so there's nothing to point it "
                     "back at.",
-                    "To stop using Qdrant, point your application back at PostgreSQL; the "
-                    "table was never changed.",
+                    "To stop using Qdrant, point your application back at its previous "
+                    "store; the source was never changed.",
                 )
             if not found.client.exists(previous):
                 raise _fail(f"The old collection {previous} no longer exists.")
@@ -400,7 +462,9 @@ def rollback(job_file: Path, *, yes: bool, output_json: bool) -> None:
             )
             found.switch.point(previous)
             _record(found, "rollback")
-            return _differences(found, found.new, previous) if found.from_qdrant else 0
+            if found.from_qdrant and found.same_server:
+                return _differences(found, found.new, previous)
+            return 0
         finally:
             found.writer.release()
 
@@ -451,18 +515,15 @@ def cleanup(job_file: Path, *, yes: bool, output_json: bool) -> None:
                 )
             if not previous:
                 raise _fail(
-                    "There's no old collection to delete: before cutover, searches didn't go "
-                    "through Qdrant.",
-                    "The source table is untouched; drop it yourself when you're sure.",
+                    "vecshift doesn't know of an old collection to delete: either the alias "
+                    "didn't exist before cutover, or this folder has no record of it.",
+                    "Delete the old collection yourself when you're sure. A pgvector source "
+                    "table is untouched; drop it yourself too.",
                 )
+            if previous == found.new or previous in dict(found.client.aliases()).values():
+                raise _fail(f"{previous} is still in use, so it won't be deleted.")
             if not found.client.exists(previous):
                 raise _fail(f"{previous} is already gone.")
-            still = [a for a, c in found.client.aliases() if c == previous]
-            if still:
-                raise _fail(
-                    f"Aliases still point at {previous}: {', '.join(sorted(still))}.",
-                    "Move or delete them first.",
-                )
             if not yes:
                 warning = (
                     f"Cleanup deletes the collection {previous} and every point in it. The "

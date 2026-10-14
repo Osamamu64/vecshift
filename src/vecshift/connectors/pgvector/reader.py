@@ -14,7 +14,7 @@ import psycopg
 from psycopg import sql
 
 from vecshift.connectors.pgvector.inspect import VECTOR_TYPES
-from vecshift.connectors.pgvector.writer import STATEMENT_TIMEOUT_MS, _limits
+from vecshift.connectors.pgvector.writer import SCAN_TIMEOUT_MS, STATEMENT_TIMEOUT_MS, _limits
 from vecshift.connectors.qdrant.writer import Item
 
 POINT_NAMESPACE = uuid.UUID("5c1f4a52-8a0e-4d7c-9a51-6f0b1d3c2e77")
@@ -29,8 +29,10 @@ def point_id(key: Any) -> int | str:
     if isinstance(key, uuid.UUID):
         return str(key)
     if isinstance(key, str):
+        # Only the canonical form: other spellings of the same UUID are different keys.
         try:
-            return str(uuid.UUID(key))
+            if str(uuid.UUID(key)) == key:
+                return key
         except ValueError:
             pass
     return str(uuid.uuid5(POINT_NAMESPACE, str(key)))
@@ -78,10 +80,12 @@ class PgSource:
             t=sql.Identifier(self.text_field)
         )
 
-    def _read(self, query: sql.Composed, params: Sequence[Any]) -> list[tuple[Any, ...]]:
+    def _read(
+        self, query: sql.Composed, params: Sequence[Any], timeout_ms: int = STATEMENT_TIMEOUT_MS
+    ) -> list[tuple[Any, ...]]:
         with self.conn.transaction():
             self.conn.execute("SET TRANSACTION READ ONLY")
-            _limits(self.conn, STATEMENT_TIMEOUT_MS)
+            _limits(self.conn, timeout_ms)
             return self.conn.execute(query, params).fetchall()
 
     def page(self, after: Any, limit: int) -> tuple[list[Item], Any]:
@@ -105,25 +109,29 @@ class PgSource:
         query = sql.SQL("SELECT count(*) FROM {table} WHERE {has}").format(
             table=self.table, has=self._has_text()
         )
-        rows = self._read(query, ())
+        rows = self._read(query, (), SCAN_TIMEOUT_MS)
         return int(rows[0][0]) if rows else 0
 
     def present(self, points: Sequence[dict[str, Any]]) -> set[int | str]:
-        keys: dict[str, int | str] = {}
+        """Matched by point ID, computed from the key the database returns, so keys whose
+        JSON form differs from their text form (timestamps, numerics) still match."""
+        wanted = {p["id"] for p in points}
+        keys = []
         for point in points:
             key = (point.get("payload") or {}).get(self.pk)
-            if key is not None:
-                keys[str(key)] = point["id"]
+            if key is not None and not isinstance(key, (dict, list, bool)):
+                keys.append(str(key))
         if not keys:
             return set()
         # Cast the keys to the key's own type, so the lookup uses the primary key index.
         query = sql.SQL(
-            "SELECT {pk}::text FROM {table} WHERE {pk} = ANY(%s::text[]::{type}[]) AND {has}"
+            "SELECT {pk} FROM {table} WHERE {pk} = ANY(%s::text[]::{type}[]) AND {has}"
         ).format(
             pk=sql.Identifier(self.pk), table=self.table, type=self.pk_type, has=self._has_text()
         )
         try:
-            rows = self._read(query, (list(keys),))
-        except psycopg.errors.InvalidTextRepresentation:
-            return set()
-        return {keys[str(r[0])] for r in rows if str(r[0]) in keys}
+            rows = self._read(query, (keys,))
+        except psycopg.errors.DataError:
+            # A key that doesn't parse as the key's type can't be checked: keep the page.
+            return wanted
+        return {point_id(r[0]) for r in rows} & wanted

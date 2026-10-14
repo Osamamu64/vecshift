@@ -139,6 +139,30 @@ def build_qdrant_plan(
                 hint="Set target.collection to a new name.",
             )
         )
+    elif target.name_is_alias:
+        findings.append(
+            Finding(
+                "plan.collection_is_alias",
+                Severity.ERROR,
+                "The new collection's name is an alias",
+                f"`{target.collection}` is an alias, so Qdrant can't create a collection "
+                "with that name.",
+                hint="Pick another target.collection.",
+            )
+        )
+    elif target.exists and not target.owned:
+        findings.append(
+            Finding(
+                "plan.collection_not_ours",
+                Severity.ERROR,
+                "The new collection already exists",
+                f"`{target.collection}` exists, and this job didn't create it. Filling it "
+                "would overwrite points with the same IDs and delete all the others.",
+                hint="Pick another target.collection, or delete that one if it's unused. If "
+                "this job created it from another folder, run vecshift there: its record is "
+                "in .vecshift/.",
+            )
+        )
     elif target.exists:
         want = DISTANCES.get(distance)
         if target.dimensions is not None and target.dimensions == dims and target.distance == want:

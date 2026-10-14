@@ -153,6 +153,8 @@ def _next_qdrant(stage: str, missing: int | None, alias: str) -> str:
 
 def collect_qdrant(job_file: Path) -> Status:
     """Where a migration into Qdrant stands. Read-only, but it reads the whole source."""
+    import psycopg
+
     from vecshift import cli_qdrant
     from vecshift.cli_plan import qdrant_settings, read_job
     from vecshift.connectors import qdrant
@@ -177,7 +179,8 @@ def collect_qdrant(job_file: Path) -> Status:
     alias = target.alias
     if alias is None and isinstance(job.source, QdrantSourceSpec):
         alias = job.source.collection if job.source.collection in aliases else None
-    last = state.history[-1] if state.history else None
+    events = cli_qdrant.history(state, alias, collection)
+    last = events[-1] if events else None
     if alias and aliases.get(alias) == collection:
         stage = "cleaned_up" if last and last.get("event") == "cleanup" else "cut_over"
     elif exists:
@@ -202,6 +205,8 @@ def collect_qdrant(job_file: Path) -> Status:
                 index = "hnsw"
         except qdrant.QdrantError as exc:
             raise _fail(str(exc), exc.hint) from exc
+        except psycopg.Error as exc:
+            raise _fail(f"The database reported an error: {cli_qdrant._first_line(exc)}") from exc
         finally:
             found.close()
     if stage == "filling" and missing == 0 and (index or target.index == "none"):

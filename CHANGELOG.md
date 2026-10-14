@@ -28,6 +28,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   name. `eval` searches both sides as the application does, sweeping Qdrant's `hnsw_ef`,
   including a pgvector column against its new Qdrant collection.
 - `plan --json` includes `store`, where the new vectors go.
+- Safeguards for migrations into Qdrant: `apply` only fills a collection the job created
+  itself (recorded in `.vecshift/`), so it never overwrites or prunes an existing
+  collection; rollback and cleanup only use the job's own cutover record and stop without
+  one; cutover re-checks for missing points after removing deleted ones, so it never
+  switches searches to an incomplete collection.
 
 ### Changed
 

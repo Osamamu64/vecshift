@@ -2,6 +2,7 @@
 
 import base64
 import hashlib
+import inspect
 import json
 import os
 import re
@@ -482,3 +483,22 @@ def test_qdrant_switches_ask_first() -> None:
     searches = Path(search.__file__).read_text(encoding="utf-8")
     for write in ("upsert", "batch", "delete", "update_aliases", "create_"):
         assert write not in searches
+
+
+def test_apply_only_fills_collections_it_created() -> None:
+    """A migration into Qdrant overwrites and deletes points only in a collection this job
+    created (recorded in its state file), and rollback and cleanup use only this job's own
+    cutover record, never another job's."""
+    from vecshift.cli_qdrant import history
+    from vecshift.connectors.qdrant.writer import QdrantWriter
+    from vecshift.migrate import JobState
+
+    for method in (QdrantWriter.ensure_column, QdrantWriter.remove_deleted):
+        assert "self.owned" in inspect.getsource(method)
+    state = JobState(Path("x"))
+    state.history = [
+        {"event": "cutover", "store": "qdrant", "alias": "b", "new": "b2", "previous": "b1"},
+        {"event": "cutover", "store": "qdrant", "alias": "a", "new": "a2", "previous": "a1"},
+    ]
+    assert [h["previous"] for h in history(state, "b", "b2")] == ["b1"]
+    assert history(state, "b", "a2") == []

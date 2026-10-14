@@ -15,7 +15,7 @@ search until cutover points its alias there.
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Collection, Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import IO, Any, Protocol
@@ -28,6 +28,25 @@ INDEX_WAIT_S = 6 * 3600.0
 """How long apply waits for Qdrant to finish indexing before it gives up waiting."""
 
 DISTANCES = {"cosine": "Cosine", "inner_product": "Dot", "l2": "Euclid", "l1": "Manhattan"}
+
+
+def same_payload(a: Any, b: Any) -> bool:
+    """Equal as JSON values, counting 1 and 1.0 as the same: PostgreSQL writes big numbers
+    as integers that Qdrant stores as floats."""
+    if isinstance(a, bool) or isinstance(b, bool):
+        return a is b
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+        if isinstance(a, int) and isinstance(b, int):
+            return a == b
+        try:
+            return float(a) == float(b)
+        except OverflowError:
+            return False
+    if isinstance(a, dict) and isinstance(b, dict):
+        return a.keys() == b.keys() and all(same_payload(a[k], b[k]) for k in a)
+    if isinstance(a, list) and isinstance(b, list):
+        return len(a) == len(b) and all(same_payload(x, y) for x, y in zip(a, b, strict=True))
+    return bool(a == b)
 
 
 class AlreadyRunning(Exception):
@@ -154,8 +173,12 @@ class QdrantWriter:
         index_wait_s: float = INDEX_WAIT_S,
         sleep: Callable[[float], None] = time.sleep,
         read_only: bool = False,
+        owned: Collection[str] = (),
+        on_create: Callable[[str], None] = lambda name: None,
     ) -> None:
-        """``read_only`` counts without copying changed payloads, for status."""
+        """``read_only`` counts without copying changed payloads, for status. ``owned``
+        names collections this job created; an existing collection is only filled if it's
+        one of them. ``on_create`` records a collection as soon as it's created."""
         self.client = client
         self.source = source
         self.layout = layout
@@ -164,6 +187,8 @@ class QdrantWriter:
         self.index_wait_s = index_wait_s
         self._sleep = sleep
         self.read_only = read_only
+        self.owned = set(owned)
+        self.on_create = on_create
         self._lock: IO[str] | None = None
         self._depth = 0
         self.payloads_copied = 0
@@ -208,6 +233,13 @@ class QdrantWriter:
         """Create the new collection if it's missing. Returns whether it was created."""
         lay = self.layout
         if self.client.exists(lay.collection):
+            if lay.collection not in self.owned:
+                raise QdrantError(
+                    f"Collection {lay.collection!r} already exists, and this job didn't "
+                    "create it. Filling it would overwrite its points and delete the rest.",
+                    hint="Pick another target.collection. If this job created it from "
+                    "another folder, run vecshift there: its record is in .vecshift/.",
+                )
             if not lay.matches(self.client.collection(lay.collection)):
                 raise QdrantError(
                     f"Collection {lay.collection!r} already exists with a different vector "
@@ -216,6 +248,8 @@ class QdrantWriter:
                 )
             return False
         self.client.create_collection(lay.collection, lay.vectors_config())
+        self.owned.add(lay.collection)
+        self.on_create(lay.collection)
         for name, schema in sorted(lay.payload_indexes.items()):
             self.client.create_payload_index(lay.collection, name, schema)
         return True
@@ -226,9 +260,11 @@ class QdrantWriter:
 
     # --- comparing source and copy
 
-    def _scan(self, after: Any, exclude: Sequence[str]) -> Iterator[tuple[Item, bool]]:
-        """Source entries after ``after`` with whether each needs embedding. Payload-only
-        changes are copied on the way."""
+    def _scan(
+        self, after: Any, exclude: Sequence[str], *, sync: bool = False
+    ) -> Iterator[tuple[Item, bool]]:
+        """Source entries after ``after`` with whether each needs embedding. With ``sync``,
+        payload-only changes are copied on the way."""
         excluded = set(exclude)
         cursor = after
         while True:
@@ -244,12 +280,12 @@ class QdrantWriter:
                     continue
                 copy = copies.get(item.point)
                 needs = copy is None or _get(copy, self.source.text_field) != item.text
-                if not needs and copy != item.payload:
+                if not needs and not same_payload(copy, item.payload):
                     stale.append(
                         {"overwrite_payload": {"payload": item.payload, "points": [item.point]}}
                     )
                 checked.append((item, needs))
-            if stale and not self.read_only:
+            if stale and sync and not self.read_only:
                 self.client.batch(self.layout.collection, stale)
                 self.payloads_copied += len(stale)
             yield from checked
@@ -266,7 +302,7 @@ class QdrantWriter:
     def fetch(self, after: Any, limit: int, exclude: Sequence[str] = ()) -> list[Item]:
         """The next entries after ``after`` that need a vector."""
         found: list[Item] = []
-        for item, needs in self._scan(after, exclude):
+        for item, needs in self._scan(after, exclude, sync=True):
             if needs:
                 found.append(item)
                 if len(found) >= limit:
@@ -293,6 +329,10 @@ class QdrantWriter:
 
     def remove_deleted(self) -> int:
         """Delete points whose source is gone or has lost its text. Returns how many."""
+        if self.layout.collection not in self.owned or self.read_only:
+            raise QdrantError(
+                f"Won't delete points from {self.layout.collection!r}: this job didn't create it."
+            )
         removed, offset = 0, None
         while True:
             points, offset = self.client.scroll(
