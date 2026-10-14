@@ -151,16 +151,21 @@ def _queries(
             labeled = load_queries(file)[:count]
         except CorpusError as exc:
             raise _fail(str(exc)) from exc
-        keys = sorted({k for q in labeled for k in q.relevant})
+        # Labels name rows by their own key; eval may name them differently (point IDs).
+        translate = getattr(searcher, "translate", None)
+        given = sorted({k for q in labeled for k in q.relevant})
+        names = translate(given) if translate else {k: k for k in given}
+        relevant = [frozenset(names.get(k, k) for k in q.relevant) for q in labeled]
+        keys = sorted({k for r in relevant for k in r})
         texts = searcher.texts(text, keys)
         queries = [
             EvalQuery(
                 q.text,
-                q.relevant,
+                r,
                 script(q.text),
-                script(" ".join(texts.get(k, "") for k in sorted(q.relevant))),
+                script(" ".join(texts.get(k, "") for k in sorted(r))),
             )
-            for q in labeled
+            for q, r in zip(labeled, relevant, strict=True)
         ]
         missing = [k for k in keys if k not in texts]
         notes = [f"{len(missing)} labeled answers aren't in the table."] if missing else []

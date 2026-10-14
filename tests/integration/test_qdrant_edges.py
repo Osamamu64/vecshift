@@ -229,3 +229,52 @@ def test_new_alias_over_a_collection_searched_by_name(
     done = cli(tmp_path, monkeypatch, "cleanup", "--yes", "--json")
     assert done.exit_code == 0 and json.loads(done.output)["deleted"] == old
     assert alias_target(http, live) == new
+
+
+def test_labeled_queries_name_rows_by_their_own_key(
+    http: httpx.Client,
+    setup: psycopg.Connection,
+    db_dsn: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A labels file names rows as the table does ("doc-7"), not by Qdrant point ID."""
+    new = name()
+    setup.execute(
+        "CREATE TABLE notes (id text PRIMARY KEY, body text, embedding extensions.vector(3))"
+    )
+    topics = ["refunds", "deliveries", "passwords", "invoices", "returns", "coupons"]
+    for i, topic in enumerate(topics, 1):
+        setup.execute(
+            "INSERT INTO notes VALUES (%s, %s, '[1,0,0]')",
+            (f"doc-{i}", f"How {topic} work for customers, step by step, with {topic} examples."),
+        )
+    labels = tmp_path / "q.jsonl"
+    labels.write_text(
+        "".join(
+            json.dumps({"query": f"{topic} examples", "relevant": [f"doc-{i}"]}) + "\n"
+            for i, topic in enumerate(topics, 1)
+        )
+    )
+    monkeypatch.setenv("VECSHIFT_DSN", db_dsn)
+    (tmp_path / "vecshift.yaml").write_text(
+        f"source: {{table: notes}}\ntarget: {{type: qdrant, collection: {new}}}\nmodel: hash/32\n"
+    )
+    assert cli(tmp_path, monkeypatch, "apply", "--yes").exit_code == 0
+    evaluated = cli(
+        tmp_path,
+        monkeypatch,
+        "eval",
+        "--json",
+        "-y",
+        "--queries",
+        str(labels),
+        "--num-queries",
+        "6",
+        "--neighbours",
+        "0",
+    )
+    assert evaluated.exit_code in {0, 1, 3}, evaluated.output
+    report = json.loads(evaluated.output)
+    assert report["new"]["scores"]["all"]["recall_at_10"] == 1.0
+    assert not any("aren't in the table" in n for n in report["notes"])
