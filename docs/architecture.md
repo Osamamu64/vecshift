@@ -140,7 +140,8 @@ interfaces: a writer for the store (add the column and trigger, fetch rows that 
 vector, write vectors back, build the index) and the embedding contract for the model. It
 reports progress as events, which the CLI renders as a progress line or JSON lines, and an
 API can stream the same way. The pgvector writer lives in
-[`connectors/pgvector/writer.py`](../src/vecshift/connectors/pgvector/writer.py).
+[`connectors/pgvector/writer.py`](../src/vecshift/connectors/pgvector/writer.py), and the
+Qdrant one in [`connectors/qdrant/writer.py`](../src/vecshift/connectors/qdrant/writer.py).
 
 The database is the checkpoint: a row is done when its new vector is filled in, and a
 trigger clears it when the row's text changes. Vectors are written with a guard that the
@@ -152,8 +153,16 @@ across runs and rejected row IDs.
 Cutover ([`switch.py`](../src/vecshift/connectors/pgvector/switch.py)) renames columns in
 one transaction, so the application's column name now holds the new vectors. The sync
 trigger always guards whichever column isn't live, which is what lets rollback report
-exactly which rows lack an old-model vector. Stores that can't rename a vector field will
-implement the same step with an alias swap.
+exactly which rows lack an old-model vector.
+
+Qdrant can't change a collection's vectors in place, so a migration into Qdrant fills a
+new collection instead, from a Qdrant collection or a pgvector table read page by page in
+key order (the [source readers](../src/vecshift/connectors/qdrant/writer.py)). The new
+collection is its own checkpoint: a point needs embedding when it's missing there or its
+text differs from the source, so there's no trigger to install, and each run also copies
+payload-only edits and removes deleted points. Cutover
+([`connectors/qdrant/switch.py`](../src/vecshift/connectors/qdrant/switch.py)) moves the
+application's alias to the new collection in one atomic request.
 
 ## Evaluating
 
@@ -161,7 +170,10 @@ implement the same step with an alias swap.
 a searcher interface (top k through the index at a given setting, exact top k, a row's
 nearest rows, stored vectors) and the embedding contract. The pgvector searcher in
 [`connectors/pgvector/search.py`](../src/vecshift/connectors/pgvector/search.py) runs every
-search in its own read-only transaction. Scores are grouped by query and document script,
+search in its own read-only transaction; the Qdrant searcher in
+[`connectors/qdrant/search.py`](../src/vecshift/connectors/qdrant/search.py) can pair two
+collections, or a pgvector column with its new collection, naming rows the same way on
+both sides. Scores are grouped by query and document script,
 so a regression in one language can't hide in the average.
 
 ## Change capture

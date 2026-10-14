@@ -46,17 +46,21 @@ anything that sends data off the machine; `tests/test_security.py` pins those pr
 
 ### Integration tests
 
-Tests under `tests/integration` run against a real PostgreSQL with pgvector. They're skipped
-unless `VECSHIFT_TEST_PG_DSN` is set:
+Tests under `tests/integration` run against a real PostgreSQL with pgvector, and the Qdrant
+ones also against a real Qdrant. They're skipped unless `VECSHIFT_TEST_PG_DSN` (and, for
+Qdrant, `VECSHIFT_TEST_QDRANT_URL`) is set:
 
 ```bash
 docker run -d --name vecshift-pg -p 55432:5432 -e POSTGRES_PASSWORD=postgres pgvector/pgvector:pg17
+docker run -d --name vecshift-qdrant -p 6333:6333 qdrant/qdrant:v1.19.2
 export VECSHIFT_TEST_PG_DSN=postgresql://postgres:postgres@localhost:55432/postgres
+export VECSHIFT_TEST_QDRANT_URL=http://localhost:6333
 uv run pytest
 ```
 
 Each test creates and drops its own database, laid out like Supabase (pgvector in an
-`extensions` schema). CI runs them against PostgreSQL 16 and 17.
+`extensions` schema), and its own Qdrant collections. CI runs them against PostgreSQL 16
+and 17, with Qdrant 1.19.
 
 ## Project layout
 
@@ -70,7 +74,7 @@ src/vecshift/
   planning/    # turning a job into a plan: changes, estimates, findings
   migrate/     # the apply loop and its state file, independent of any store
   eval/        # comparing old and new vectors: queries, scores, latency, the verdict
-  connectors/  # one package per store, e.g. pgvector
+  connectors/  # one package per store: pgvector and qdrant
   cli.py       # command-line interface
 tests/         # pytest suite
 docs/          # architecture, roadmap, prior art

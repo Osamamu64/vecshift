@@ -12,7 +12,8 @@
 uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest
 ```
 
-Integration tests need `VECSHIFT_TEST_PG_DSN`; see CONTRIBUTING.md.
+Integration tests need `VECSHIFT_TEST_PG_DSN`, and the Qdrant ones also
+`VECSHIFT_TEST_QDRANT_URL`; see CONTRIBUTING.md.
 
 ## Security rules
 

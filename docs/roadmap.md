@@ -37,7 +37,7 @@ Read-only tools. No writes to your stores, no production risk.
   - [x] proxy, LLM-generated, and labeled queries
   - [x] embedding cache and cost confirmation
   - [ ] the index's existing vectors as a baseline, without re-embedding the documents
-- Connectors (read only): **pgvector** ✅, **Qdrant** ✅
+- Connectors (read only): **pgvector** ✅, **Qdrant** ✅ (both also migrate, in Phase 2)
 - Providers: **OpenAI-compatible** (covers OpenAI, vLLM, Ollama, TEI, and most hosted
   inference) ✅ and a **hashing baseline** for free runs ✅
 
