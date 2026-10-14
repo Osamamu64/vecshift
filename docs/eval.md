@@ -2,7 +2,8 @@
 
 `vecshift eval` answers the question to ask before cutover: is the new model better on
 *your* data, and how fast is it? It compares the old and new vectors already in your
-database, so it only embeds short queries, never your documents.
+database, so it only embeds short queries, never your documents. It works the same for
+migrations into Qdrant; see [Evaluating](connectors/qdrant.md#evaluating) there.
 
 ```bash
 vecshift eval                                  # quality + latency, then GO / NO-GO

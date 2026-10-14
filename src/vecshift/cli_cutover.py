@@ -207,7 +207,14 @@ def cutover(
     ] = False,
     output_json: Annotated[bool, typer.Option("--json", help="Print the result as JSON.")] = False,
 ) -> None:
-    """Switch searches to the new vectors by giving them the column name your app uses."""
+    """Switch searches to the new vectors: the column name your app uses, or its alias."""
+    from vecshift import cli_qdrant
+
+    if cli_qdrant.into_qdrant(job_file):
+        cli_qdrant.cutover(
+            job_file, check=check, yes=yes, allow_missing=allow_missing, output_json=output_json
+        )
+        return
     from vecshift.connectors.pgvector.switch import PgSwitch, StillPending
     from vecshift.connectors.pgvector.writer import PgWriter
 
@@ -323,7 +330,12 @@ def rollback(
     yes: Annotated[bool, typer.Option("--yes", "-y", help="Don't ask before switching.")] = False,
     output_json: Annotated[bool, typer.Option("--json", help="Print the result as JSON.")] = False,
 ) -> None:
-    """Undo a cutover: give the old vectors their column name back."""
+    """Undo a cutover: give the old vectors their column name (or alias) back."""
+    from vecshift import cli_qdrant
+
+    if cli_qdrant.into_qdrant(job_file):
+        cli_qdrant.rollback(job_file, yes=yes, output_json=output_json)
+        return
     from vecshift.connectors.pgvector.switch import PgSwitch
     from vecshift.connectors.pgvector.writer import PgWriter
 
@@ -391,11 +403,16 @@ def rollback(
 def cleanup(
     job_file: Annotated[Path, typer.Argument(help="The job file.")] = DEFAULT_JOB,
     yes: Annotated[
-        bool, typer.Option("--yes", "-y", help="Don't ask for the column name first.")
+        bool, typer.Option("--yes", "-y", help="Don't ask for the column (or collection) name.")
     ] = False,
     output_json: Annotated[bool, typer.Option("--json", help="Print the result as JSON.")] = False,
 ) -> None:
     """After cutover, drop the old vectors for good. This can't be undone."""
+    from vecshift import cli_qdrant
+
+    if cli_qdrant.into_qdrant(job_file):
+        cli_qdrant.cleanup(job_file, yes=yes, output_json=output_json)
+        return
     from vecshift.connectors.pgvector.switch import PgSwitch
     from vecshift.connectors.pgvector.writer import PgWriter
 

@@ -48,6 +48,7 @@ class Status:
     failed: int
     last_event: dict[str, str] | None
     next: str
+    source_store: str = "pgvector"
     store: str = "pgvector"
     """Where the new vectors go. For ``qdrant``, ``live`` is the alias, ``new`` the new
     collection, and ``previous`` the source."""
@@ -143,93 +144,78 @@ def _next_qdrant(stage: str, missing: int | None, alias: str) -> str:
             "changes."
         )
     if stage == "cut_over":
-        return "Searches use the new collection. Undo with vecshift rollback."
-    return "Nothing left to do: the new collection is live."
+        return (
+            "Switch your application to the new model. Undo with vecshift rollback; when "
+            "you're sure, delete the old collection with vecshift cleanup."
+        )
+    return "Nothing left to do: the new collection is live and the old one is gone."
 
 
 def collect_qdrant(job_file: Path) -> Status:
     """Where a migration into Qdrant stands. Read-only, but it reads the whole source."""
-    from vecshift.cli_plan import _pg_source, pg_settings, qdrant_settings, read_job
-    from vecshift.connectors import pgvector, qdrant
-    from vecshift.connectors.qdrant.writer import Layout, QdrantSource, QdrantWriter
+    import psycopg
+
+    from vecshift import cli_qdrant
+    from vecshift.cli_plan import qdrant_settings, read_job
+    from vecshift.connectors import qdrant
+    from vecshift.connectors.qdrant.writer import QdrantWriter
     from vecshift.jobs.spec import QdrantSource as QdrantSourceSpec
     from vecshift.migrate import JobState
 
     job = read_job(job_file)
     target = job.qdrant_target
     state = JobState.for_job(job_file, job.name)
-    settings = qdrant_settings(job.target_url_env, job.target_key_env)
-    closers: list[Any] = []
+    collection = job.target_collection
+    if isinstance(job.source, QdrantSourceSpec):
+        label = previous = job.source.collection
+    else:
+        label = previous = job.pg_source.table
     try:
-        client = qdrant.QdrantClient(settings)
-        closers.append(client.close)
-        aliases = dict(client.aliases())
-        collection = job.target_collection
-        source: Any
-        if isinstance(job.source, QdrantSourceSpec):
-            src = job.source
-            reader = client
-            if (src.url_env, src.key_env) != (job.target_url_env, job.target_key_env):
-                reader = qdrant.QdrantClient(qdrant_settings(src.url_env, src.key_env))
-                closers.append(reader.close)
-            alias = target.alias or (src.collection if src.collection in aliases else None)
-            field, _ = qdrant.select_field(reader, src.collection, src.vector)
-            previous = field.collection
-            if aliases.get(src.collection) == collection:
-                # Cut over: the alias now names the new collection. The old one is the
-                # source the job copied from, recorded at cutover.
-                last = next((h for h in reversed(state.history) if "previous" in h), None)
-                previous = last["previous"] if last else previous
-            profile = qdrant.inspect(reader, previous, src.vector, src.text_field, 50)
-            text = (profile.text_field or "").removeprefix("payload.")
-            source = QdrantSource(reader, previous, text, None)
-            label = f"{src.collection} → {previous}" if src.collection != previous else previous
-            vector = target.vector or field.name
-        else:
-            alias = target.alias
-            pg = pg_settings(job.pg_source.dsn_env)
-            profile, table, _ = _pg_source(job, pg, 50)
-            text = profile.text_field or ""
-            from vecshift.connectors.pgvector.reader import PgSource
-
-            conn = pgvector.connect_reader(pg)
-            closers.append(conn.close)
-            source = PgSource(
-                conn, table.source.schema, table.source.table, table.primary_key[0], text
-            )
-            previous = label = f"{table.source.schema}.{table.source.table}"
-            vector = target.vector
-
-        exists = client.exists(collection)
-        last = state.history[-1] if state.history else None
-        rows = missing = None
-        index = None
-        if alias and aliases.get(alias) == collection:
-            stage = "cut_over"
-        elif exists:
-            stage = "filling"
-        elif last and last.get("event") == "cleanup":
-            stage = "cleaned_up"
-        else:
-            stage = "not_started"
-        if exists and text:
-            layout = Layout(collection, vector, 0, "")
-            writer = QdrantWriter(client, source, layout, read_only=True)
-            rows = writer.total_count()
-            missing = writer.pending_count(tuple(state.failed))
-            if client.collection(collection).get("status") == "green":
-                index = "hnsw"
-        if stage == "filling" and missing == 0 and (index or target.index == "none"):
-            stage = "ready"
+        with qdrant.QdrantClient(qdrant_settings(job.target_url_env, job.target_key_env)) as c:
+            aliases = dict(c.aliases())
+            exists = c.exists(collection)
     except qdrant.QdrantError as exc:
         raise _fail(str(exc), exc.hint) from exc
-    except pgvector.ConnectError as exc:
-        raise _fail(f"Couldn't connect: {exc}", exc.hint) from exc
-    except pgvector.TargetSelectionError as exc:
-        raise _fail(str(exc)) from exc
-    finally:
-        for close in closers:
-            close()
+    alias = target.alias
+    if alias is None and isinstance(job.source, QdrantSourceSpec):
+        alias = job.source.collection if job.source.collection in aliases else None
+    events = cli_qdrant.history(state, alias, collection)
+    last = events[-1] if events else None
+    if alias and aliases.get(alias) == collection:
+        stage = "cleaned_up" if last and last.get("event") == "cleanup" else "cut_over"
+    elif exists:
+        stage = "filling"
+    else:
+        stage = "not_started"
+
+    rows = missing = None
+    index = None
+    recorded = any(e.get("event") == "cutover" for e in events)
+    unknown = stage == "cut_over" and isinstance(job.source, QdrantSourceSpec) and not recorded
+    if unknown:
+        # Cut over from another folder: the old collection isn't known here.
+        previous = "unknown (no cutover record in this folder)"
+    if stage in {"filling", "cut_over"} and not unknown:
+        found = cli_qdrant.locate(job_file)
+        try:
+            previous = found.previous or previous
+            if isinstance(job.source, QdrantSourceSpec) and previous != job.source.collection:
+                label = f"{job.source.collection} → {previous}"
+            counter = QdrantWriter(
+                found.client, found.writer.source, found.writer.layout, read_only=True
+            )
+            rows = counter.total_count()
+            missing = counter.pending_count(tuple(state.failed))
+            if found.client.collection(collection).get("status") == "green":
+                index = "hnsw"
+        except qdrant.QdrantError as exc:
+            raise _fail(str(exc), exc.hint) from exc
+        except psycopg.Error as exc:
+            raise _fail(f"The database reported an error: {cli_qdrant._first_line(exc)}") from exc
+        finally:
+            found.close()
+    if stage == "filling" and missing == 0 and (index or target.index == "none"):
+        stage = "ready"
 
     return Status(
         stage=stage,
@@ -247,6 +233,7 @@ def collect_qdrant(job_file: Path) -> Status:
         failed=len(state.failed),
         last_event=last,
         next=_next_qdrant(stage, missing, alias or ""),
+        source_store=job.source.type,
         store="qdrant",
     )
 
@@ -438,13 +425,15 @@ def _render_rich(status: Status, job_name: str) -> None:
 
 
 def _unit(status: Status) -> str:
-    return "points" if status.store == "qdrant" and "." not in status.previous else "rows"
+    return "points" if status.source_store == "qdrant" else "rows"
 
 
 def _qdrant_where(status: Status) -> str:
     alias = status.live
     if status.stage == "cut_over":
         return f"{status.new}, which {alias} now points at · old kept in {status.previous}"
+    if status.stage == "cleaned_up":
+        return f"{status.new}, which {alias} points at"
     if alias:
         return f"{status.new} · {alias} still points at the old vectors"
     return f"{status.new} · no alias set"

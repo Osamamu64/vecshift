@@ -35,6 +35,10 @@ class QdrantTargetState:
     """Payload indexes on the source collection, recreated on the new one."""
     collections: frozenset[str] = frozenset()
     """Every collection on the server."""
+    owned: bool = False
+    """Whether this job created the new collection (from its state file)."""
+    name_is_alias: bool = False
+    """Whether the new collection's name is taken by an alias."""
 
 
 def payload_indexes(info: dict[str, Any]) -> dict[str, Any]:
@@ -100,5 +104,6 @@ def inspect_target(
         other_vectors=other,
         payload_indexes=indexes,
         collections=collections,
+        name_is_alias=collection in aliases,
         **state,
     )

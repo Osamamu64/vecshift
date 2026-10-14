@@ -254,6 +254,29 @@ class QdrantClient:
                 wait=True,
             )
 
+    def update_aliases(self, actions: list[dict[str, Any]]) -> None:
+        """Alias changes, applied together: Qdrant applies one request atomically."""
+        self._request("POST", "/collections/aliases", {"actions": actions})
+
+    def delete_collection(self, name: str) -> None:
+        self._request("DELETE", f"/collections/{_segment(name)}")
+
+    def query(self, name: str, body: dict[str, Any]) -> list[dict[str, Any]]:
+        """Points nearest a vector (Qdrant 1.10+)."""
+        result = self._request("POST", f"/collections/{_segment(name)}/points/query", body)
+        return list((result or {}).get("points", []))
+
+    def vectors(self, name: str, ids: list[int | str], vector: str | None) -> list[dict[str, Any]]:
+        """The points with these IDs, with their vector (and payload)."""
+        if not ids:
+            return []
+        result = self._request(
+            "POST",
+            f"/collections/{_segment(name)}/points",
+            {"ids": ids, "with_payload": True, "with_vector": [vector] if vector else True},
+        )
+        return list(result or [])
+
     def delete_points(self, name: str, ids: list[int | str]) -> None:
         if ids:
             self.batch(name, [{"delete": {"points": ids}}])

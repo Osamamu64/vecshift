@@ -6,7 +6,7 @@ such as ``hnsw.ef_search`` are set for that transaction only.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Literal
 
 import psycopg
@@ -38,7 +38,10 @@ class PgSearcher:
         partial: bool = False,
         group: sql.Composable | None = None,
         timeout_ms: int = TIMEOUT_MS,
+        key_fn: Callable[[Any], str] | None = None,
     ) -> None:
+        """``key_fn`` names rows by their key's value instead of its text form, such as the
+        Qdrant point ID a migration gave the row, so both sides of eval use the same keys."""
         if metric not in OPERATORS:
             raise ValueError(f"unsupported metric {metric!r}")
         if not set(types.values()) <= {"vector", "halfvec"}:
@@ -46,6 +49,9 @@ class PgSearcher:
         self.conn = conn
         self.table = sql.Identifier(schema, table)
         self.pk = sql.Identifier(pk)
+        self.key_fn = key_fn
+        self.key: sql.Composable = self.pk if key_fn else sql.SQL("{}::text").format(self.pk)
+        self._values: dict[str, Any] = {}
         self.columns = {side: sql.Identifier(name) for side, name in columns.items()}
         self.names = dict(columns)
         self.types = {side: sql.Identifier(extension_schema, kind) for side, kind in types.items()}
@@ -72,6 +78,20 @@ class PgSearcher:
             return self.conn.execute(query, params).fetchall()
         finally:
             self.conn.rollback()
+
+    def _out(self, value: Any) -> str:
+        """A row's key as eval sees it."""
+        if self.key_fn is None:
+            return str(value)
+        key = self.key_fn(value)
+        self._values[key] = value
+        return key
+
+    def _in(self, keys: Sequence[str]) -> list[Any]:
+        """Keys as the query compares them: the text form, or values seen before."""
+        if self.key_fn is None:
+            return list(keys)
+        return [self._values[k] for k in keys if k in self._values]
 
     @staticmethod
     def _literal(vector: Sequence[float]) -> str:
@@ -117,9 +137,10 @@ class PgSearcher:
                 sql.Literal(percent)
             )
         query = sql.SQL(
-            "SELECT {pk}::text, {t}::text FROM {table}{ts} WHERE {both} AND {t} IS NOT NULL "
+            "SELECT {key}, {t}::text FROM {table}{ts} WHERE {both} AND {t} IS NOT NULL "
             "AND btrim({t}::text) <> '' ORDER BY md5({pk}::text) LIMIT %s"
         ).format(
+            key=self.key,
             pk=self.pk,
             t=text_id,
             table=self.table,
@@ -128,22 +149,22 @@ class PgSearcher:
                 self.columns["old"], self.columns["new"]
             ),
         )
-        return [(str(k), str(t)) for k, t in self._run(query, (size,), {})]
+        return [(self._out(k), str(t)) for k, t in self._run(query, (size,), {})]
 
     def texts(self, text: str, keys: Sequence[str]) -> dict[str, str]:
         """The text of the given rows, by key."""
         if not keys:
             return {}
-        query = sql.SQL(
-            "SELECT {pk}::text, {t}::text FROM {table} WHERE {pk}::text = ANY(%s)"
-        ).format(pk=self.pk, t=sql.Identifier(text), table=self.table)
-        return {str(k): str(t or "") for k, t in self._run(query, (list(keys),), {})}
+        query = sql.SQL("SELECT {key}, {t}::text FROM {table} WHERE {key} = ANY(%s)").format(
+            key=self.key, t=sql.Identifier(text), table=self.table
+        )
+        return {self._out(k): str(t or "") for k, t in self._run(query, (self._in(keys),), {})}
 
     # --- searches
 
     def _select(self, side: Side) -> sql.Composable:
-        return sql.SQL("{pk}::text, ({col} {op} %s::{type})::float8").format(
-            pk=self.pk, col=self.columns[side], op=self.operator, type=self.types[side]
+        return sql.SQL("{key}, ({col} {op} %s::{type})::float8").format(
+            key=self.key, col=self.columns[side], op=self.operator, type=self.types[side]
         )
 
     def search(
@@ -157,7 +178,7 @@ class PgSearcher:
         literal = self._literal(vector)
         query = self._query(side, where=None, select=self._select(side))
         rows = self._run(query, (literal, literal, k), settings)
-        return [(str(r[0]), float(r[1])) for r in rows]
+        return [(self._out(r[0]), float(r[1])) for r in rows]
 
     def exact(self, side: Side, vector: Sequence[float], k: int) -> list[tuple[str, float]]:
         """Top ``k`` (key, distance) by scanning every row: what an index approximates."""
@@ -165,7 +186,7 @@ class PgSearcher:
         query = self._query(side, where=self._filter(side), select=self._select(side))
         settings = {"enable_indexscan": "off", "enable_bitmapscan": "off"}
         rows = self._run(query, (literal, literal, k), settings)
-        return [(str(r[0]), float(r[1])) for r in rows]
+        return [(self._out(r[0]), float(r[1])) for r in rows]
 
     def index(self, side: Side) -> tuple[str | None, int | None, list[int]]:
         """The ANN index on a side's column, its current search setting, and a sweep."""
@@ -202,22 +223,25 @@ class PgSearcher:
 
     def neighbours(self, side: Side, key: str, k: int) -> tuple[str | None, list[tuple[str, str]]]:
         """A row's own group and its ``k`` nearest other rows, using that row's stored vector."""
+        values = self._in([key])
+        if not values:
+            return None, []
         own = self._run(
-            sql.SQL("SELECT {col}::text, ({group})::text FROM {table} WHERE {pk} = %s").format(
-                col=self.columns[side], group=self.group, table=self.table, pk=self.pk
+            sql.SQL("SELECT {col}::text, ({group})::text FROM {table} WHERE {key} = %s").format(
+                col=self.columns[side], group=self.group, table=self.table, key=self.key
             ),
-            (key,),
+            (values[0],),
             {},
         )
         if not own or own[0][0] is None:
             return None, []
         vector, group = own[0]
-        where = sql.SQL("{} <> %s AND {}").format(self.pk, self._filter(side))
+        where = sql.SQL("{} <> %s AND {}").format(self.key, self._filter(side))
         query = sql.SQL(
-            "SELECT {pk}::text, ({group})::text FROM {table} WHERE {where} "
+            "SELECT {key}, ({group})::text FROM {table} WHERE {where} "
             "ORDER BY {col} {op} %s::{type} LIMIT %s"
         ).format(
-            pk=self.pk,
+            key=self.key,
             group=self.group,
             table=self.table,
             where=where,
@@ -226,15 +250,15 @@ class PgSearcher:
             type=self.types[side],
         )
         settings = {"enable_indexscan": "off", "enable_bitmapscan": "off"} if self.partial else {}
-        rows = self._run(query, (key, vector, k), settings)
-        return group, [(str(r[0]), r[1]) for r in rows]
+        rows = self._run(query, (values[0], vector, k), settings)
+        return group, [(self._out(r[0]), r[1]) for r in rows]
 
     def vectors(self, side: Side, keys: Sequence[str]) -> list[list[float]]:
         """Stored vectors of the given rows."""
         if not keys:
             return []
         query = sql.SQL(
-            "SELECT {col}::text FROM {table} WHERE {pk}::text = ANY(%s) AND {col} IS NOT NULL"
-        ).format(col=self.columns[side], table=self.table, pk=self.pk)
-        rows = self._run(query, (list(keys),), {})
+            "SELECT {col}::text FROM {table} WHERE {key} = ANY(%s) AND {col} IS NOT NULL"
+        ).format(col=self.columns[side], table=self.table, key=self.key)
+        rows = self._run(query, (self._in(keys),), {})
         return [[float(x) for x in str(r[0]).strip("[]").split(",")] for r in rows]

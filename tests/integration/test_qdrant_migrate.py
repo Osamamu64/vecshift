@@ -142,8 +142,55 @@ def test_qdrant_to_qdrant(
     assert status["live"] == alias and status["previous"] == old and status["new"] == new
     assert status["rows"] == 94 and status["missing"] == 0
 
-    blocked = cli(tmp_path, monkeypatch, "cutover", "--check")
-    assert blocked.exit_code == 2 and "can't handle migrations into Qdrant yet" in blocked.output
+    evaluated = cli(
+        tmp_path, monkeypatch, "eval", "--json", "-y", "--num-queries", "10", "--neighbours", "10"
+    )
+    assert evaluated.exit_code in {0, 1, 3}, evaluated.output
+    report = json.loads(evaluated.output)
+    assert report["new"]["column"] == new and report["old"]["column"] == old
+    assert report["new"]["index_method"] == "qdrant-hnsw"
+
+    ready = cli(tmp_path, monkeypatch, "cutover", "--check")
+    assert ready.exit_code == 0 and "Ready to cut over" in ready.output
+    http.post(
+        f"/collections/{old}/points/payload?wait=true",
+        json={"payload": {"text": "Article 5, last-minute edit"}, "points": [5]},
+    ).raise_for_status()
+    switched = cli(tmp_path, monkeypatch, "cutover", "--yes", "--json")
+    assert switched.exit_code == 0, switched.output
+    outcome = json.loads(switched.output)
+    assert outcome["status"] == "cut_over" and outcome["caught_up"] == 1
+    assert outcome["previous"] == old and outcome["late"] == 0
+
+    def alias_target() -> str:
+        found = http.get("/aliases").json()["result"]["aliases"]
+        return str(next(a["collection_name"] for a in found if a["alias_name"] == alias))
+
+    assert alias_target() == new
+    assert points(http, new)[5]["payload"]["text"] == "Article 5, last-minute edit"
+    status = json.loads(cli(tmp_path, monkeypatch, "status", "--json").output)
+    assert status["stage"] == "cut_over" and status["previous"] == old
+    again = cli(tmp_path, monkeypatch, "plan")
+    assert again.exit_code == 1 and "Already cut over" in again.output
+
+    # The application writes through the alias, now into the new collection.
+    http.put(
+        f"/collections/{alias}/points?wait=true",
+        json={"points": [{"id": 500, "vector": {"dense": [0.0] * 16}, "payload": {"text": "n"}}]},
+    ).raise_for_status()
+    back = cli(tmp_path, monkeypatch, "rollback", "--yes", "--json")
+    assert back.exit_code == 0, back.output
+    assert json.loads(back.output)["changed"] == 1 and alias_target() == old
+
+    assert cli(tmp_path, monkeypatch, "cutover", "--yes").exit_code == 0
+    assert alias_target() == new
+    refused = cli(tmp_path, monkeypatch, "cleanup")
+    assert refused.exit_code == 2 and http.get(f"/collections/{old}").status_code == 200
+    done = cli(tmp_path, monkeypatch, "cleanup", "--yes", "--json")
+    assert done.exit_code == 0 and json.loads(done.output)["deleted"] == old
+    assert http.get(f"/collections/{old}").status_code == 404
+    status = json.loads(cli(tmp_path, monkeypatch, "status", "--json").output)
+    assert status["stage"] == "cleaned_up"
 
 
 def test_pgvector_to_qdrant(
@@ -198,5 +245,23 @@ def test_pgvector_to_qdrant(
     assert setup.execute("SELECT count(*) FROM notes").fetchone() == (39,)
 
     status = json.loads(cli(tmp_path, monkeypatch, "status", "--json").output)
-    assert status["stage"] == "ready" and status["table"] == "public.notes"
+    assert status["stage"] == "ready" and status["table"] == "notes"
     assert status["rows"] == 38 and status["missing"] == 0
+
+    evaluated = cli(
+        tmp_path, monkeypatch, "eval", "--json", "-y", "--num-queries", "10", "--neighbours", "10"
+    )
+    assert evaluated.exit_code in {0, 1, 3}, evaluated.output
+    report = json.loads(evaluated.output)
+    assert report["old"]["column"] == "notes.embedding" and report["new"]["column"] == new
+
+    switched = cli(tmp_path, monkeypatch, "cutover", "--yes", "--json")
+    assert switched.exit_code == 0, switched.output
+    assert json.loads(switched.output)["previous"] is None
+    aliases = http.get("/aliases").json()["result"]["aliases"]
+    assert {"alias_name": alias, "collection_name": new} in aliases
+    back = cli(tmp_path, monkeypatch, "rollback", "--yes")
+    assert back.exit_code == 2 and "nothing to point it back at" in back.output
+    cleaned = cli(tmp_path, monkeypatch, "cleanup", "--yes")
+    assert cleaned.exit_code == 2 and "untouched" in cleaned.output
+    assert setup.execute("SELECT count(*) FROM notes").fetchone() == (39,)

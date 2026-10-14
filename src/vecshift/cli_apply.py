@@ -358,7 +358,7 @@ def apply(
     closers: list[Any] = []
     try:
         writer = (
-            _qdrant_writer(ready, job_file, plan.dimensions, closers)
+            _qdrant_writer(ready, state, plan.dimensions, closers)
             if isinstance(ready, QdrantPrepared)
             else _pg_writer(ready, plan.dimensions, closers)
         )
@@ -526,11 +526,10 @@ def _pg_writer(ready: Prepared, dims: int, closers: list[Any]) -> Any:
     return PgWriter(conn, layout)
 
 
-def _qdrant_writer(ready: QdrantPrepared, job_file: Path, dims: int, closers: list[Any]) -> Any:
+def _qdrant_writer(ready: QdrantPrepared, state: JobState, dims: int, closers: list[Any]) -> Any:
     from vecshift.connectors import pgvector
     from vecshift.connectors.qdrant import QdrantClient
     from vecshift.connectors.qdrant.writer import DISTANCES, Layout, QdrantSource, QdrantWriter
-    from vecshift.migrate import JobState
 
     client = QdrantClient(ready.qdrant)
     closers.append(client.close)
@@ -568,8 +567,21 @@ def _qdrant_writer(ready: QdrantPrepared, job_file: Path, dims: int, closers: li
         distance=DISTANCES[ready.plan.metric],
         payload_indexes=ready.target.payload_indexes,
     )
-    lock = JobState.for_job(job_file, ready.job.name).path.with_suffix(".lock")
-    return QdrantWriter(client, source, layout, lock)
+    return QdrantWriter(
+        client,
+        source,
+        layout,
+        state.path.with_suffix(".lock"),
+        owned=state.collections,
+        on_create=lambda name: _owns(state, name),
+    )
+
+
+def _owns(state: JobState, collection: str) -> None:
+    """Record a collection this job created, at once, so a crash can't lose the record."""
+    if collection not in state.collections:
+        state.collections.append(collection)
+        state.save()
 
 
 async def _run(writer: Any, embedder: Any, state: Any, **kwargs: Any) -> ApplyResult:

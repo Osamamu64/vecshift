@@ -17,7 +17,7 @@ QUERY_SOURCES = {
     "generated": "written by an LLM from sampled rows",
     "cross-language": "written by an LLM in the other language",
 }
-SETTING_NAMES = {"hnsw": "ef_search", "ivfflat": "probes"}
+SETTING_NAMES = {"hnsw": "ef_search", "ivfflat": "probes", "qdrant-hnsw": "hnsw_ef"}
 VERDICTS = {
     "go": ("ok", Severity.OK, "GO: the new vectors are ready"),
     "no_go": ("error", Severity.ERROR, "NO-GO: don't cut over yet"),

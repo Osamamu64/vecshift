@@ -3,8 +3,8 @@
 A migration re-embeds a pgvector column with a new model, side by side with the old one,
 then switches searches over in one step. This page covers the job file and the four
 commands: `plan`, `apply`, `cutover`, and `rollback`. [Evaluating a migration](eval.md)
-covers `eval`, which compares the old and new vectors before you switch. To migrate into
-Qdrant, from a Qdrant collection or a pgvector table, see
+covers `eval`, which compares the old and new vectors before you switch. The same
+commands migrate into Qdrant, from a Qdrant collection or a pgvector table: see
 [Migrating into Qdrant](connectors/qdrant.md#migrating-into-qdrant).
 
 ```bash

@@ -26,6 +26,9 @@ class JobState:
     """Row ID → error, for rows the provider rejected. Text is never stored."""
     history: list[dict[str, str]] = field(default_factory=list)
     """Cutovers and rollbacks: what happened, when, and to which columns."""
+    collections: list[str] = field(default_factory=list)
+    """Qdrant collections this job created. apply fills only these, and removes points
+    from them, so it never takes over a collection it didn't make."""
     updated_at: str | None = None
 
     @classmethod

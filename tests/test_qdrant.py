@@ -44,6 +44,23 @@ class FakeQdrant:
             self.points[name], key=lambda p: (isinstance(p["id"], str), str(p["id"]).zfill(20))
         )
 
+    @staticmethod
+    def _nearest(points: list[dict[str, Any]], body: dict[str, Any]) -> list[dict[str, Any]]:
+        """Dot-product scores, best first, like a query against a Dot collection."""
+        query, using = body["query"], body.get("using")
+        skip = set()
+        for clause in (body.get("filter") or {}).get("must_not", []):
+            skip.update(clause.get("has_id", []))
+        scored = []
+        for p in points:
+            vector = p["vector"][using] if using else p["vector"]
+            if p["id"] in skip:
+                continue
+            score = sum(a * b for a, b in zip(query, vector, strict=True))
+            scored.append({"id": p["id"], "score": score, "payload": p.get("payload", {})})
+        scored.sort(key=lambda p: -p["score"])
+        return scored[: body["limit"]]
+
     def _write(self, request: httpx.Request, parts: list[str], body: Any) -> httpx.Response:
         ok = httpx.Response(200, json={"result": True, "status": "ok"})
         name = parts[1]
@@ -81,6 +98,15 @@ class FakeQdrant:
 
         if path == "/collections":
             return ok({"collections": [{"name": n} for n in self.collections]})
+        if path == "/collections/aliases":
+            for action in body["actions"]:
+                if "delete_alias" in action:
+                    name = action["delete_alias"]["alias_name"]
+                    self.aliases = [(a, c) for a, c in self.aliases if a != name]
+                else:
+                    made = action["create_alias"]
+                    self.aliases.append((made["alias_name"], made["collection_name"]))
+            return ok(True)
         if path == "/aliases":
             return ok(
                 {"aliases": [{"alias_name": a, "collection_name": c} for a, c in self.aliases]}
@@ -89,12 +115,18 @@ class FakeQdrant:
         name = parts[1] if len(parts) > 1 else ""
         if request.method == "PUT" or parts[-1] == "batch":
             return self._write(request, parts, body)
+        if request.method == "DELETE":
+            self.collections.pop(name, None)
+            self.points.pop(name, None)
+            return ok(True)
         if name not in self.collections:
             return httpx.Response(404, json={"status": {"error": "Not found"}})
         if len(parts) == 2:
             return ok(self.collections[name])
         points = self._sorted(name)
         if parts[-1] == "query":
+            if isinstance(body.get("query"), list):
+                return ok({"points": self._nearest(points, body)})
             if not self.random_sampling:
                 return httpx.Response(400, json={"status": {"error": "unknown variant"}})
             return ok({"points": points[: body["limit"]]})

@@ -118,7 +118,18 @@ def build_qdrant_plan(
         )
 
     # --- The new collection and the alias.
-    if target.live is not None and target.collection == target.live:
+    if target.alias is not None and target.alias_target == target.collection:
+        findings.append(
+            Finding(
+                "plan.cut_over",
+                Severity.ERROR,
+                "Already cut over",
+                f"The alias `{target.alias}` already points at `{target.collection}`.",
+                hint="If you've cut over, pick a new target.collection to start another "
+                "migration; otherwise target.collection names the collection in use.",
+            )
+        )
+    elif target.live is not None and target.collection == target.live:
         findings.append(
             Finding(
                 "plan.target_is_source",
@@ -128,14 +139,28 @@ def build_qdrant_plan(
                 hint="Set target.collection to a new name.",
             )
         )
-    elif target.alias is not None and target.alias_target == target.collection:
+    elif target.name_is_alias:
         findings.append(
             Finding(
-                "plan.cut_over",
+                "plan.collection_is_alias",
                 Severity.ERROR,
-                "Already cut over",
-                f"The alias `{target.alias}` already points at `{target.collection}`.",
-                hint="Pick a new target.collection to start another migration.",
+                "The new collection's name is an alias",
+                f"`{target.collection}` is an alias, so Qdrant can't create a collection "
+                "with that name.",
+                hint="Pick another target.collection.",
+            )
+        )
+    elif target.exists and not target.owned:
+        findings.append(
+            Finding(
+                "plan.collection_not_ours",
+                Severity.ERROR,
+                "The new collection already exists",
+                f"`{target.collection}` exists, and this job didn't create it. Filling it "
+                "would overwrite points with the same IDs and delete all the others.",
+                hint="Pick another target.collection, or delete that one if it's unused. If "
+                "this job created it from another folder, run vecshift there: its record is "
+                "in .vecshift/.",
             )
         )
     elif target.exists:

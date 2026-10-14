@@ -1,9 +1,8 @@
 # Qdrant
 
 VecShift works with [Qdrant](https://qdrant.tech) over the REST API: `doctor` and `bench`
-read collections, and `plan`, `apply`, and `status` [migrate into Qdrant](#migrating-into-qdrant),
-from another Qdrant collection or from a pgvector table. `cutover`, `rollback`, `cleanup`,
-and `eval` for Qdrant are next on the [roadmap](../roadmap.md).
+read collections, and every migration command [migrates into Qdrant](#migrating-into-qdrant),
+from another Qdrant collection or from a pgvector table.
 
 ## Connecting
 
@@ -60,7 +59,9 @@ For text anywhere else, pass its path with `--text-column`, such as `metadata.te
 
 - `doctor` and `bench` only read. They never create, change, or delete anything.
 - `apply` writes only to the new collection. The source collection or table is only read,
-  and `status` only reads both.
+  and `status` and `eval` only read both.
+- `cutover` and `rollback` only move the alias, after asking (or `--yes`). `cleanup` is the
+  only command that deletes a collection, after you type its name.
 - Qdrant can't compute norms or hashes itself, so `doctor` reads a sample of points with
   their vectors (a random sample on Qdrant 1.11 and later, otherwise the first points),
   turns them into counts, dimensions, norms, and hashes in memory, and discards them.
@@ -132,16 +133,58 @@ never locked or changed.
 ### Running it
 
 ```bash
-vecshift plan      # checks both sides and estimates cost, without changing anything
-vecshift apply     # creates the collection and fills it
-vecshift status    # how far along it is, and what to run next
+vecshift plan             # checks both sides and estimates cost, without changing anything
+vecshift apply            # creates the collection and fills it
+vecshift status           # how far along it is, and what to run next
+vecshift eval             # old vs new on your data, before you switch; read-only
+vecshift cutover --check  # is it safe to switch? changes nothing
+vecshift cutover          # points the alias at the new collection
+vecshift rollback         # points it back
+vecshift cleanup          # deletes the old collection, when you're sure
 ```
+
+`apply` only ever fills a collection it created itself. If `target.collection` already
+exists and this job didn't create it, `plan` and `apply` stop rather than overwrite its
+points. The record of which collections a job created, and of its cutovers, is in
+`.vecshift/` next to the job file; run later commands from the same folder.
 
 Run `apply` again at any time to catch up. The new collection itself is the record of
 progress: a point is (re-)embedded when it's missing there or its text differs from the
 source, a payload-only edit is copied without calling the model, and points deleted from
 the source (or whose text was removed) are deleted from the new collection at the end of
 a complete run. After filling, `apply` waits for Qdrant to finish indexing.
+
+### Evaluating
+
+`vecshift eval` works as for pgvector ([Evaluating a migration](../eval.md)), searching
+both sides the way the application does: the old collection (or, from PostgreSQL, the old
+column) and the new collection, with Qdrant's `hnsw_ef` swept in place of `ef_search`.
+`--group-by` takes a payload path, such as `metadata.source`, and common document fields are
+found automatically. For Qdrant it compares complete collections, so run `apply` to the end
+first.
+
+### Cutting over
+
+`cutover` first catches up: it embeds points that changed since the last `apply` and
+removes deleted ones. Then it moves the alias in a single request, which Qdrant applies
+atomically, so every search through the alias switches at once. Neither collection is
+changed by the switch. Switch your application's query model at the same time.
+
+Writes that land in the old collection in the moments between the final catch-up and the
+switch aren't copied: cutover counts them afterwards and reports them as `late`. Writes
+through the alias after the switch go to the new collection.
+
+From PostgreSQL, cutover creates the alias (or moves it, if it already named a
+collection). The table is never changed, so there's nothing to roll back to unless the
+alias pointed somewhere before; to go back, point the application at PostgreSQL again.
+
+`rollback` points the alias back at the old collection, and reports how many points were
+added or edited in the new collection since cutover, which the old one doesn't have.
+`cleanup` deletes the old collection once you're sure. It asks you to type its name, and
+refuses while any alias still points at it. Rollback isn't possible after cleanup.
+
+Rollback and cleanup only act on a collection named in this job's own cutover record. If
+the folder has no record (you cut over from somewhere else), they stop rather than guess.
 
 ### What `plan` checks for Qdrant
 
@@ -150,7 +193,9 @@ a complete run. After filling, `apply` waits for Qdrant to finish indexing.
 | `plan.no_alias` | warning | Nothing to switch at cutover: set `target.alias` |
 | `plan.alias_conflict` | error | The alias name is already a collection's |
 | `plan.target_is_source` | error | `target.collection` is the collection being replaced |
-| `plan.collection_exists` | info | The new collection exists with matching vectors; apply fills the gaps |
+| `plan.collection_not_ours` | error | `target.collection` exists, and this job didn't create it |
+| `plan.collection_is_alias` | error | `target.collection` is already an alias's name |
+| `plan.collection_exists` | info | This job's collection exists with matching vectors; apply fills the gaps |
 | `plan.collection_conflict` | error | It exists with a different size or distance |
 | `plan.cut_over` | error | The alias already points at the new collection |
 | `plan.other_vectors` | error | The source has more vectors than the one being replaced, which a copy would drop |
@@ -160,7 +205,8 @@ a complete run. After filling, `apply` waits for Qdrant to finish indexing.
 ### Limits for now
 
 - Each `apply` compares the whole source with the new collection, page by page. That's
-  cheap next to embedding, but it reads every point once per pass.
+  cheap next to embedding, but it reads every point once per pass; `status`, `eval`, and
+  `cutover` do the same to count what's missing.
 - Only one `apply` per job should run at a time. Qdrant has no locks, so vecshift guards
   with a lock file in `.vecshift/`, which only covers runs from the same directory.
 - Collections with several named vectors, or with sparse vectors, aren't supported yet.

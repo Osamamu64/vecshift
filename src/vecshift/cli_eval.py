@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Annotated, Any
 import typer
 
 from vecshift.cli_plan import DEFAULT_JOB, _fail, load
+from vecshift.eval.html import SETTING_NAMES
 from vecshift.migrate.engine import SETTLED_ROWS, SETTLED_SHARE
 
 if TYPE_CHECKING:
@@ -21,6 +22,7 @@ if TYPE_CHECKING:
     from vecshift.connectors.pgvector.search import PgSearcher
     from vecshift.embeddings import ModelSpec
     from vecshift.eval import EvalQuery, EvalReport, SideReport
+    from vecshift.jobs import JobSpec
 
 EXIT_INCONCLUSIVE = 3
 SETUP_TIMEOUT_MS = 10 * 60_000
@@ -221,84 +223,30 @@ def _confirm(sends: list[tuple[str, str]], count: int, yes: bool) -> None:
         raise typer.Exit(1)
 
 
-def eval_(
-    job_file: Annotated[Path, typer.Argument(help="The job file.")] = DEFAULT_JOB,
-    num_queries: Annotated[int, typer.Option(min=5, max=10_000, help="Queries to evaluate.")] = 200,
-    queries: Annotated[
-        Path | None,
-        typer.Option(help='JSONL of labeled queries: {"query": ..., "relevant": [ids]} per line.'),
-    ] = None,
-    generate_queries: Annotated[
-        str | None,
-        typer.Option(
-            metavar="CHAT_MODEL",
-            help="Write realistic queries with this chat model, e.g. openai/gpt-4o-mini.",
-        ),
-    ] = None,
-    cross_language: Annotated[
-        bool,
-        typer.Option(
-            help="With --generate-queries: ask in the other language (Arabic for Latin-script "
-            "rows, English for Arabic ones)."
-        ),
-    ] = False,
-    old_model: Annotated[
-        str | None,
-        typer.Option(help="The model that made the old vectors (default: source.model)."),
-    ] = None,
-    group_by: Annotated[
-        str | None,
-        typer.Option(
-            metavar="COLUMN[.KEY]",
-            help="Which rows belong to one document, e.g. document_id or metadata.source.",
-        ),
-    ] = None,
-    neighbours: Annotated[
-        int, typer.Option(min=0, max=5_000, help="Rows whose nearest rows are compared.")
-    ] = 100,
-    tolerance: Annotated[
-        float, typer.Option(min=0, max=1, help="How far recall@10 may fall and still pass.")
-    ] = 0.02,
-    min_slice: Annotated[
-        int, typer.Option(min=1, help="Fewest queries for a language pair to decide the verdict.")
-    ] = 30,
-    max_p95_ms: Annotated[
-        float | None, typer.Option(help="Fail if the new p95 (embed + search) is above this.")
-    ] = None,
-    max_slowdown: Annotated[
-        float | None,
-        typer.Option(metavar="PERCENT", help="Fail if the new p95 is this much slower than old."),
-    ] = None,
-    dsn_env: Annotated[
-        str | None,
-        typer.Option(help="Read the connection string from this variable, e.g. a replica's."),
-    ] = None,
-    seed: Annotated[int, typer.Option(help="Seed for sampling.")] = 7,
-    yes: Annotated[
-        bool, typer.Option("--yes", "-y", help="Don't ask before sending data.")
-    ] = False,
-    output_json: Annotated[bool, typer.Option("--json", help="Print results as JSON.")] = False,
-    html: Annotated[
-        Path | None,
-        typer.Option("--html", dir_okay=False, help="Also write an HTML report to this file."),
-    ] = None,
-) -> None:
-    """Compare the old and new vectors on your data: search quality and latency. Read-only."""
+@dataclass(slots=True)
+class _Setup:
+    job: JobSpec
+    spec: ModelSpec
+    searcher: Any
+    text: str
+    old_name: str
+    new_name: str
+    dims: dict[str, int | None]
+    partial: bool
+    pending: int
+    group_name: str | None
+    close: Any
+    unit: str = "rows"
+
+
+def _setup_pg(job_file: Path, dsn_env: str | None, group_by: str | None) -> _Setup:
     from vecshift.connectors import pgvector
     from vecshift.connectors.pgvector.inspect import TEXT_COLUMNS, TEXT_TYPES, _pick
     from vecshift.connectors.pgvector.inspect import _columns as table_columns
     from vecshift.connectors.pgvector.search import PgSearcher
     from vecshift.connectors.pgvector.target import inspect_target, resolve_source_column
-    from vecshift.embeddings import parse_spec
-    from vecshift.eval import Gates, SideReport
 
     job, settings, spec = load(job_file, dsn_env, command="vecshift eval")
-    old_raw = old_model or job.pg_source.model
-    old_spec = parse_spec(old_raw) if old_raw else None
-    generator = parse_spec(generate_queries) if generate_queries else None
-    if cross_language and generator is None:
-        raise _fail("--cross-language needs --generate-queries.")
-
     try:
         conn = pgvector.connect(settings)
     except pgvector.ConnectError as exc:
@@ -364,8 +312,273 @@ def eval_(
         partial=partial,
         group=group,
     )
-    old = SideReport("old", cols.old, old_spec.name if old_spec else None)
-    new = SideReport("new", cols.new, spec.name)
+    return _Setup(
+        job=job,
+        spec=spec,
+        searcher=searcher,
+        text=text,
+        old_name=cols.old,
+        new_name=cols.new,
+        dims={k: (int(v[0]) if v and v[0] > 0 else None) for k, v in dims.items()},
+        partial=partial,
+        pending=pending,
+        group_name=group_name,
+        close=conn.close,
+    )
+
+
+def _qdrant_group(points: list[dict[str, Any]], option: str | None) -> str | None:
+    """The payload field telling which points belong to one document."""
+    from vecshift.connectors.qdrant.inspect import _get
+
+    if option:
+        return option
+    for key in GROUP_KEYS:
+        for prefix in ("", "metadata.", "meta."):
+            if any(_get(p.get("payload") or {}, prefix + key) is not None for p in points):
+                return prefix + key
+    return None
+
+
+def _store_error(exc: Exception) -> Exception:
+    """A Qdrant or database error as a clean message; anything else unchanged."""
+    import psycopg
+
+    from vecshift.connectors.qdrant import QdrantError
+
+    if isinstance(exc, QdrantError):
+        return _fail(str(exc), exc.hint or "eval only reads; run it again.")
+    if isinstance(exc, psycopg.Error):
+        text = str(exc).strip()
+        detail = text.splitlines()[0] if text else type(exc).__name__
+        return _fail(f"The database reported an error: {detail}", "eval only reads; run it again.")
+    return exc
+
+
+def _setup_qdrant(job_file: Path, group_by: str | None, dsn_env: str | None = None) -> _Setup:
+    """Old and new vectors of a migration into Qdrant, before or after cutover."""
+    from vecshift import cli_qdrant
+    from vecshift.cli_plan import pg_settings
+    from vecshift.connectors.pgvector.reader import point_id
+    from vecshift.connectors.qdrant.inspect import _fields, _points
+    from vecshift.connectors.qdrant.search import PgSide, QdrantRows, QdrantSide, SplitSearcher
+    from vecshift.connectors.qdrant.writer import QdrantSource, QdrantWriter
+    from vecshift.jobs.spec import QdrantSource as QdrantSourceSpec
+
+    found = cli_qdrant.locate(job_file, dsn_env)
+    closers: list[Any] = [found.close]
+
+    def close() -> None:
+        for fn in reversed(closers):
+            fn()
+
+    try:
+        client, lay = found.client, found.writer.layout
+        if not client.exists(found.new):
+            raise _fail(
+                f"There are no new vectors to evaluate yet: {found.new} doesn't exist.",
+                "Run apply.",
+            )
+        counter = QdrantWriter(client, found.writer.source, lay, read_only=True)
+        total = counter.total_count()
+        pending = counter.pending_count(tuple(found.state.failed))
+        if total - pending <= 0:
+            raise _fail("The new collection has no vectors yet.", "Run apply.")
+        if pending > max(SETTLED_ROWS, SETTLED_SHARE * (total - pending)):
+            raise _fail(
+                f"{pending:,} points don't have a new vector yet.",
+                "eval for Qdrant compares complete collections: run apply to finish first.",
+            )
+        new_points, _ = _points(client, found.new, False, 200, 201)
+        group = _qdrant_group(new_points, group_by)
+        new_dims = lay.dims or None
+        source = found.writer.source
+        if isinstance(source, QdrantSource):
+            reader = source.client
+            info = reader.collection(source.collection)
+            wanted = (
+                found.job.source.vector if isinstance(found.job.source, QdrantSourceSpec) else None
+            )
+            fields = _fields(source.collection, info)
+            field = next((f for f in fields if f.name == wanted), fields[0])
+            old_side: Any = QdrantSide(
+                reader,
+                source.collection,
+                field.name,
+                field.distance or "Cosine",
+                group_field=group,
+            )
+            new_side = QdrantSide(client, found.new, lay.vector, lay.distance, group_field=group)
+            rows: Any = QdrantRows(new_side, found.text_field)
+            old_name, old_dims, unit = source.collection, field.dimensions, "points"
+        else:
+            from vecshift.connectors.pgvector.reader import PgSource
+            from vecshift.connectors.pgvector.search import PgSearcher
+
+            if not isinstance(source, PgSource):
+                raise _fail("Unknown source for this job.")
+            pk = source.pk
+            settings = pg_settings(dsn_env or found.job.pg_source.dsn_env)
+            prepared = _setup_pg_source(found, settings)
+            conn, target, live, kind, metric = prepared
+            closers.append(conn.close)
+            pg = PgSearcher(
+                conn,
+                schema=target.source.schema,
+                table=target.source.table,
+                pk=pk,
+                columns={"old": live, "new": live},
+                types={"old": kind, "new": kind},
+                extension_schema=target.extension_schema,
+                metric=metric,
+                key_fn=lambda value: str(point_id(value)),
+            )
+            old_side = PgSide(pg, "old")
+            new_side = QdrantSide(
+                client,
+                found.new,
+                lay.vector,
+                lay.distance,
+                group_field=group,
+            )
+            rows = pg
+            old_name, old_dims, unit = (
+                f"{target.source.table}.{live}",
+                target.source.dimensions,
+                "rows",
+            )
+        searcher = SplitSearcher(rows, {"old": old_side, "new": new_side})
+    except Exception as exc:
+        close()
+        raise _store_error(exc) from exc
+    except BaseException:
+        close()
+        raise
+    return _Setup(
+        job=found.job,
+        spec=found.spec,
+        searcher=searcher,
+        text=found.text_field,
+        old_name=old_name,
+        new_name=found.new,
+        dims={"old": old_dims, "new": new_dims},
+        partial=False,
+        pending=pending,
+        group_name=group,
+        close=close,
+        unit=unit,
+    )
+
+
+def _setup_pg_source(found: Any, settings: Any) -> tuple[Any, Any, str, str, str]:
+    """A read-only connection to a pgvector source, and its live vector column."""
+    from vecshift.connectors import pgvector
+    from vecshift.connectors.pgvector.inspect import _columns as table_columns
+    from vecshift.connectors.pgvector.inspect import select_column
+    from vecshift.connectors.pgvector.target import inspect_target
+
+    source = found.job.pg_source
+    try:
+        conn = pgvector.connect(settings)
+    except pgvector.ConnectError as exc:
+        raise _fail(f"Couldn't connect: {exc}", exc.hint) from exc
+    try:
+        conn.execute("SELECT set_config('statement_timeout', %s, true)", (str(SETUP_TIMEOUT_MS),))
+        columns = pgvector.find_vector_columns(conn)
+        chosen = select_column(columns, source.table, source.vector_column)
+        target = inspect_target(conn, source.table, chosen.column, "")
+        kind = table_columns(conn, target.source.relid)[chosen.column]
+        metric = _metric(conn, target.source.relid, chosen.column, None)
+        conn.rollback()
+    except pgvector.TargetSelectionError as exc:
+        conn.close()
+        raise _fail(str(exc)) from exc
+    except BaseException:
+        conn.close()
+        raise
+    return conn, target, chosen.column, kind, metric
+
+
+def eval_(
+    job_file: Annotated[Path, typer.Argument(help="The job file.")] = DEFAULT_JOB,
+    num_queries: Annotated[int, typer.Option(min=5, max=10_000, help="Queries to evaluate.")] = 200,
+    queries: Annotated[
+        Path | None,
+        typer.Option(help='JSONL of labeled queries: {"query": ..., "relevant": [ids]} per line.'),
+    ] = None,
+    generate_queries: Annotated[
+        str | None,
+        typer.Option(
+            metavar="CHAT_MODEL",
+            help="Write realistic queries with this chat model, e.g. openai/gpt-4o-mini.",
+        ),
+    ] = None,
+    cross_language: Annotated[
+        bool,
+        typer.Option(
+            help="With --generate-queries: ask in the other language (Arabic for Latin-script "
+            "rows, English for Arabic ones)."
+        ),
+    ] = False,
+    old_model: Annotated[
+        str | None,
+        typer.Option(help="The model that made the old vectors (default: source.model)."),
+    ] = None,
+    group_by: Annotated[
+        str | None,
+        typer.Option(
+            metavar="COLUMN[.KEY]",
+            help="Which rows belong to one document, e.g. document_id or metadata.source.",
+        ),
+    ] = None,
+    neighbours: Annotated[
+        int, typer.Option(min=0, max=5_000, help="Rows whose nearest rows are compared.")
+    ] = 100,
+    tolerance: Annotated[
+        float, typer.Option(min=0, max=1, help="How far recall@10 may fall and still pass.")
+    ] = 0.02,
+    min_slice: Annotated[
+        int, typer.Option(min=1, help="Fewest queries for a language pair to decide the verdict.")
+    ] = 30,
+    max_p95_ms: Annotated[
+        float | None, typer.Option(help="Fail if the new p95 (embed + search) is above this.")
+    ] = None,
+    max_slowdown: Annotated[
+        float | None,
+        typer.Option(metavar="PERCENT", help="Fail if the new p95 is this much slower than old."),
+    ] = None,
+    dsn_env: Annotated[
+        str | None,
+        typer.Option(help="Read the connection string from this variable, e.g. a replica's."),
+    ] = None,
+    seed: Annotated[int, typer.Option(help="Seed for sampling.")] = 7,
+    yes: Annotated[
+        bool, typer.Option("--yes", "-y", help="Don't ask before sending data.")
+    ] = False,
+    output_json: Annotated[bool, typer.Option("--json", help="Print results as JSON.")] = False,
+    html: Annotated[
+        Path | None,
+        typer.Option("--html", dir_okay=False, help="Also write an HTML report to this file."),
+    ] = None,
+) -> None:
+    """Compare the old and new vectors on your data: search quality and latency. Read-only."""
+    from vecshift import cli_qdrant
+    from vecshift.embeddings import parse_spec
+    from vecshift.eval import Gates, SideReport
+
+    generator = parse_spec(generate_queries) if generate_queries else None
+    if cross_language and generator is None:
+        raise _fail("--cross-language needs --generate-queries.")
+    if cli_qdrant.into_qdrant(job_file):
+        setup = _setup_qdrant(job_file, group_by, dsn_env)
+    else:
+        setup = _setup_pg(job_file, dsn_env, group_by)
+    job, spec, searcher, text = setup.job, setup.spec, setup.searcher, setup.text
+    old_raw = old_model or job.source.model
+    old_spec = parse_spec(old_raw) if old_raw else None
+    partial, pending, group_name = setup.partial, setup.pending, setup.group_name
+    old = SideReport("old", setup.old_name, old_spec.name if old_spec else None)
+    new = SideReport("new", setup.new_name, spec.name)
     progress = _Steps()
     try:
         rows = searcher.sample(text, max(num_queries * 3, neighbours))
@@ -403,7 +616,7 @@ def eval_(
                 [k for k, _ in rows[:neighbours]],
                 old=old,
                 new=new,
-                dims={k: (int(v[0]) if v and v[0] > 0 else None) for k, v in dims.items()},
+                dims=setup.dims,
                 source=source,
                 partial=partial,
                 gates=Gates(tolerance, min_slice, max_p95_ms, max_slowdown),
@@ -411,14 +624,16 @@ def eval_(
                 on_step=(lambda s: None) if output_json else progress.step,
             )
         )
+    except Exception as exc:
+        raise _store_error(exc) from exc
     finally:
         progress.stop()
-        conn.close()
+        setup.close()
 
     if group_name:
         report.notes.append(f"Rows of the same document are matched by {group_name}.")
     if pending:
-        report.notes.append(f"{pending:,} rows don't have a new vector yet.")
+        report.notes.append(f"{pending:,} {setup.unit} don't have a new vector yet.")
     if output_json:
         typer.echo(json.dumps(report.to_dict(), indent=2))
     else:
@@ -601,7 +816,7 @@ def _render_fancy(report: EvalReport, name: str) -> None:
         ui.section("Latency vs accuracy")
         rows = []
         for side in (old, new):
-            setting = {"hnsw": "ef_search", "ivfflat": "probes"}.get(side.method or "", "exact")
+            setting = SETTING_NAMES.get(side.method or "", "exact")
             lat = side.embed_latency
             embed = f"{_ms(lat.p50_ms)} / {_ms(lat.p95_ms)}" if lat else "—"
             for i, point in enumerate(side.sweep):
@@ -711,7 +926,7 @@ def _render(report: EvalReport, name: str) -> None:
         for side in (old, new):
             if not side.sweep:
                 continue
-            setting = {"hnsw": "ef_search", "ivfflat": "probes"}.get(side.method or "", "exact")
+            setting = SETTING_NAMES.get(side.method or "", "exact")
             typer.echo(f"  {side.side} search ({side.method or 'no index'}):")
             for point in side.sweep:
                 mark = " *" if point.current else ""
