@@ -15,9 +15,10 @@
 ![Status: alpha](https://img.shields.io/badge/status-alpha-orange)
 
 > [!WARNING]
-> VecShift is in early development. The full pgvector workflow works today: `doctor`,
-> `bench`, `plan`, `apply`, `eval`, and `cutover`. Watch the repo or read the
-> [roadmap](docs/roadmap.md) to follow along.
+> VecShift is in early development. The full workflow (`doctor`, `bench`, `init`, `plan`,
+> `apply`, `eval`, and `cutover`) works today for pgvector and Supabase, for Qdrant, and from
+> pgvector into Qdrant. Watch the repo or read the [roadmap](docs/roadmap.md) to follow
+> along.
 
 ![vecshift init finding the vector column and choosing a model, apply re-embedding 16,000 rows with a progress bar, and status showing the migration ready to cut over](docs/images/demo.gif)
 
@@ -155,14 +156,17 @@ the [benchmarking guide](docs/bench.md).
 vecshift init
 ```
 
-At a terminal, `init` walks you through it: paste your connection string (hidden as you
-type), pick the vector column and the text it came from, choose the new model, and set a
-spending limit. It writes a commented `vecshift.yaml`, can save the connection string to
+At a terminal, `init` walks you through it: choose what to migrate (a pgvector column, a
+Qdrant collection, or a pgvector table into Qdrant), connect (secrets are hidden as you
+type), pick the vectors and the text they came from, choose the new model, and set a
+spending limit. It writes a commented `vecshift.yaml`, can save the connection settings to
 a private `.env` file if you want it to, and shows the plan. For scripts, pass everything
 as flags:
 
 ```bash
 vecshift init --table public.documents --model openai/text-embedding-3-large,dims=1024
+vecshift init --collection documents --model openai/text-embedding-3-small    # Qdrant
+vecshift init --table public.documents --to qdrant --alias documents_live --model hash/256
 vecshift plan
 ```
 

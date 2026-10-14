@@ -45,6 +45,7 @@ Read-only tools. No writes to your stores, no production risk.
 
 - [x] `vecshift init` and the `vecshift.yaml` job file, with a guided setup at a terminal
   that finds the vector columns, offers models, and can save secrets to a private `.env`
+  - [x] guided and scripted setup for Qdrant, and for pgvector into Qdrant
 - [x] `vecshift status`: where a migration stands and the command to run next
 - [x] `vecshift plan`: validate the job against the database and estimate tokens, cost, time,
   and storage, with an optional `--probe` of the real model

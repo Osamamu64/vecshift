@@ -87,5 +87,5 @@ def test_env_file_problems_are_reported(tmp_path: Path, monkeypatch: pytest.Monk
 def test_init_without_a_terminal_needs_flags(tmp_path: Path) -> None:
     result = runner.invoke(app, ["init", "-o", str(tmp_path / "j.yaml")])
     assert result.exit_code == 2
-    assert "needs --table and --model" in result.output
+    assert "needs --model and --table (or --collection)" in result.output
     assert not (tmp_path / "j.yaml").exists()

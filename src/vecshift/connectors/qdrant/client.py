@@ -23,9 +23,10 @@ TIMEOUT_S = 30.0
 class QdrantError(Exception):
     """A request failed. The message is safe to show: it never includes the API key."""
 
-    def __init__(self, message: str, hint: str | None = None) -> None:
+    def __init__(self, message: str, hint: str | None = None, status: int | None = None) -> None:
         super().__init__(message)
         self.hint = hint
+        self.status = status
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,8 +45,11 @@ class QdrantSettings:
         return self.url
 
 
-def prepare(url: str, key_env: str = DEFAULT_KEY_ENV) -> QdrantSettings:
-    """Check a Qdrant URL, and read its API key from the environment."""
+def prepare(url: str, key_env: str = DEFAULT_KEY_ENV, key: str | None = None) -> QdrantSettings:
+    """Check a Qdrant URL, and read its API key from the environment.
+
+    ``key`` is one typed in by the user (``vecshift init``), used instead of the variable.
+    """
     parsed = urlparse(url.strip())
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         raise QdrantError(
@@ -59,7 +63,7 @@ def prepare(url: str, key_env: str = DEFAULT_KEY_ENV) -> QdrantSettings:
         )
     if parsed.query or parsed.fragment:
         raise QdrantError("The Qdrant URL can't have a query string or fragment.")
-    key = os.environ.get(key_env) or None
+    key = key or os.environ.get(key_env) or None
     local = (parsed.hostname or "").lower() in LOCAL_HOSTS
     if key and parsed.scheme == "http" and not local:
         raise QdrantError(
@@ -123,6 +127,7 @@ class QdrantClient:
             raise QdrantError(
                 "Qdrant refused the request: the API key is missing or wrong.",
                 hint=f"Set {self.settings.key_env} to a key with read access.",
+                status=response.status_code,
             )
         if response.is_redirect:
             raise QdrantError(f"Qdrant at {where} answered with a redirect, which isn't followed.")
@@ -136,7 +141,9 @@ class QdrantClient:
                 status = data.get("status")
                 if isinstance(status, dict) and status.get("error"):
                     detail = f": {str(status['error'])[:200]}"
-            raise QdrantError(f"Qdrant returned {response.status_code}{detail}")
+            raise QdrantError(
+                f"Qdrant returned {response.status_code}{detail}", status=response.status_code
+            )
         if not isinstance(data, dict):
             raise QdrantError(f"Qdrant at {where} sent a response vecshift doesn't understand.")
         return data.get("result")
