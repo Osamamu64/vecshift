@@ -1,0 +1,910 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "vecshift",
+    "summary": "Safe, observable embedding migrations for any vector store.",
+    "version": "1"
+  },
+  "paths": {
+    "/api/v1/health": {
+      "get": {
+        "summary": "Health",
+        "operationId": "health_api_v1_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          },
+          "409": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          },
+          "422": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          },
+          "502": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/version": {
+      "get": {
+        "summary": "Version",
+        "operationId": "version_api_v1_version_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Version"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          },
+          "409": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          },
+          "422": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          },
+          "502": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/environment": {
+      "get": {
+        "summary": "Environment",
+        "description": "Each variable vecshift may read, and whether it's set. Never a value.",
+        "operationId": "environment_api_v1_environment_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Environment"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          },
+          "409": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          },
+          "422": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          },
+          "502": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/jobs": {
+      "get": {
+        "summary": "Jobs",
+        "description": "Every job file in the folder, with a quick stage (no row counts).",
+        "operationId": "jobs_api_v1_jobs_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Jobs"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          },
+          "409": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          },
+          "422": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          },
+          "502": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/jobs/{name}": {
+      "get": {
+        "summary": "Job",
+        "operationId": "job_api_v1_jobs__name__get",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          },
+          "409": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          },
+          "422": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          },
+          "502": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/jobs/{name}/plan": {
+      "get": {
+        "summary": "Plan",
+        "description": "The same JSON as `vecshift plan --json`. Read-only. A probe that would send sample\nrows to a remote model needs `allow_remote=true`.",
+        "operationId": "plan_api_v1_jobs__name__plan_get",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          },
+          {
+            "name": "probe",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Probe"
+            }
+          },
+          {
+            "name": "sample",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100000,
+              "minimum": 50,
+              "default": 2000,
+              "title": "Sample"
+            }
+          },
+          {
+            "name": "allow_remote",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Allow Remote"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Plan Api V1 Jobs  Name  Plan Get"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          },
+          "409": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          },
+          "422": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          },
+          "502": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/jobs/{name}/status": {
+      "get": {
+        "summary": "Status",
+        "description": "The same JSON as `vecshift status --json`. Read-only. Without `full`, rows aren't\ncounted (counting reads the whole table or source).",
+        "operationId": "status_api_v1_jobs__name__status_get",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          },
+          {
+            "name": "full",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Full"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Status Api V1 Jobs  Name  Status Get"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          },
+          "409": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          },
+          "422": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          },
+          "502": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/doctor": {
+      "post": {
+        "summary": "Doctor",
+        "description": "The same JSON as `vecshift doctor --json`. Read-only. The request names the\nvariables holding the connection, never their values.",
+        "operationId": "doctor_api_v1_doctor_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DoctorRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Doctor Api V1 Doctor Post"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          },
+          "409": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          },
+          "422": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          },
+          "502": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "DoctorRequest": {
+        "properties": {
+          "store": {
+            "type": "string",
+            "enum": [
+              "pgvector",
+              "qdrant"
+            ],
+            "title": "Store"
+          },
+          "dsn_env": {
+            "type": "string",
+            "title": "Dsn Env",
+            "description": "pgvector: the connection string's variable.",
+            "default": "VECSHIFT_DSN"
+          },
+          "url_env": {
+            "type": "string",
+            "title": "Url Env",
+            "description": "Qdrant: the URL's variable.",
+            "default": "VECSHIFT_QDRANT_URL"
+          },
+          "key_env": {
+            "type": "string",
+            "title": "Key Env",
+            "description": "Qdrant: the API key's variable.",
+            "default": "QDRANT_API_KEY"
+          },
+          "table": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Table"
+          },
+          "column": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Column"
+          },
+          "collection": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Collection",
+            "description": "Qdrant: a collection or alias."
+          },
+          "vector": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vector"
+          },
+          "text_field": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text Field",
+            "description": "The text column or payload field."
+          },
+          "sample": {
+            "type": "integer",
+            "maximum": 100000.0,
+            "minimum": 1.0,
+            "title": "Sample",
+            "default": 2000
+          },
+          "timeout": {
+            "type": "integer",
+            "maximum": 600.0,
+            "minimum": 1.0,
+            "title": "Timeout",
+            "description": "Seconds.",
+            "default": 60
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "store"
+        ],
+        "title": "DoctorRequest"
+      },
+      "Environment": {
+        "properties": {
+          "variables": {
+            "items": {
+              "$ref": "#/components/schemas/Variable"
+            },
+            "type": "array",
+            "title": "Variables"
+          }
+        },
+        "type": "object",
+        "required": [
+          "variables"
+        ],
+        "title": "Environment"
+      },
+      "Health": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "ok",
+            "title": "Status",
+            "default": "ok"
+          }
+        },
+        "type": "object",
+        "title": "Health"
+      },
+      "Job": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "spec": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Spec",
+            "description": "The job file as JSON."
+          },
+          "yaml": {
+            "type": "string",
+            "title": "Yaml",
+            "description": "The job file as written."
+          },
+          "state": {
+            "$ref": "#/components/schemas/JobState"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "spec",
+          "yaml",
+          "state"
+        ],
+        "title": "Job"
+      },
+      "JobState": {
+        "properties": {
+          "runs": {
+            "type": "integer",
+            "title": "Runs"
+          },
+          "rows_written": {
+            "type": "integer",
+            "title": "Rows Written"
+          },
+          "tokens": {
+            "type": "integer",
+            "title": "Tokens"
+          },
+          "spent_usd": {
+            "type": "number",
+            "title": "Spent Usd"
+          },
+          "failed": {
+            "type": "integer",
+            "title": "Failed",
+            "description": "Rows or points the model provider rejected."
+          },
+          "history": {
+            "items": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "type": "array",
+            "title": "History"
+          },
+          "collections": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Collections"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "runs",
+          "rows_written",
+          "tokens",
+          "spent_usd",
+          "failed",
+          "history",
+          "collections",
+          "updated_at"
+        ],
+        "title": "JobState"
+      },
+      "JobSummary": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "valid": {
+            "type": "boolean",
+            "title": "Valid",
+            "description": "Whether the file is a valid job."
+          },
+          "source": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Side"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "target": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Side"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "stage": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stage",
+            "description": "From a quick status without counting rows: `ready` shows as `filling` until GET /jobs/{name}/status?full=true has counted."
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At",
+            "description": "When the job's state last changed."
+          },
+          "problem": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Problem"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why the job or its stage is unknown."
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "valid"
+        ],
+        "title": "JobSummary"
+      },
+      "Jobs": {
+        "properties": {
+          "jobs": {
+            "items": {
+              "$ref": "#/components/schemas/JobSummary"
+            },
+            "type": "array",
+            "title": "Jobs"
+          }
+        },
+        "type": "object",
+        "required": [
+          "jobs"
+        ],
+        "title": "Jobs"
+      },
+      "Problem": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "detail": {
+            "type": "string",
+            "title": "Detail"
+          },
+          "hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hint"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "detail"
+        ],
+        "title": "Problem"
+      },
+      "Side": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "pgvector",
+              "qdrant"
+            ],
+            "title": "Type"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "The table, column, or collection."
+          }
+        },
+        "type": "object",
+        "required": [
+          "type",
+          "name"
+        ],
+        "title": "Side"
+      },
+      "Variable": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "connection",
+              "url",
+              "key"
+            ],
+            "title": "Kind"
+          },
+          "set": {
+            "type": "boolean",
+            "title": "Set"
+          },
+          "display": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display",
+            "description": "Where a connection string or URL points, without a password."
+          },
+          "problem": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Problem",
+            "description": "Why a value that's set can't be used."
+          },
+          "used_by": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Used By",
+            "description": "The jobs that read this variable."
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "kind",
+          "set",
+          "used_by"
+        ],
+        "title": "Variable"
+      },
+      "Version": {
+        "properties": {
+          "version": {
+            "type": "string",
+            "title": "Version"
+          },
+          "api": {
+            "type": "string",
+            "const": "v1",
+            "title": "Api",
+            "default": "v1"
+          }
+        },
+        "type": "object",
+        "required": [
+          "version"
+        ],
+        "title": "Version"
+      }
+    }
+  }
+}

@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
 from enum import StrEnum
 from pathlib import Path
-from typing import Annotated, Any, NoReturn
+from typing import Annotated, NoReturn
 
 import typer
 
@@ -15,8 +14,9 @@ from vecshift.cli_style import STYLE as _STYLE
 from vecshift.cli_style import warn_if_password_on_command_line
 from vecshift.cli_style import wrap as _wrap
 from vecshift.core.fingerprint import EmbeddingFingerprint
-from vecshift.doctor import Report, Severity, run_checks
+from vecshift.doctor import Report, Severity
 from vecshift.envfile import DEFAULT as DEFAULT_ENV_FILE
+from vecshift.service import ServiceError
 
 TAGLINE = "Safe, observable embedding migrations for any vector store."
 
@@ -239,21 +239,46 @@ def doctor(
     warn_if_password_on_command_line(ctx, dsn)
     source = ctx.get_parameter_source("qdrant_url")
     explicit_qdrant = source is not None and source.name == "COMMANDLINE"
-    if collection or vector or explicit_qdrant or (qdrant_url and not dsn):
-        if not qdrant_url:
-            _doctor_fail("Missing option '--qdrant' (or VECSHIFT_QDRANT_URL).")
-        profile, display, kind = _qdrant_profile(
-            str(qdrant_url), collection, vector, text_column, sample_size, timeout
-        )
-    elif dsn:
-        profile, display, kind = _pg_profile(dsn, table, column, text_column, sample_size, timeout)
-    else:
-        _doctor_fail(
-            "Missing option '--dsn' (or VECSHIFT_DSN).",
-            "Pass a PostgreSQL connection string, or --qdrant URL for Qdrant.",
-        )
+    from vecshift.service.doctor import NeedsChoice, doctor_pgvector, doctor_qdrant
 
-    report = run_checks(profile)
+    try:
+        if collection or vector or explicit_qdrant or (qdrant_url and not dsn):
+            if not qdrant_url:
+                _doctor_fail("Missing option '--qdrant' (or VECSHIFT_QDRANT_URL).")
+            found = doctor_qdrant(
+                str(qdrant_url),
+                collection=collection,
+                vector=vector,
+                text_field=text_column,
+                sample_size=sample_size,
+                timeout=timeout,
+            )
+        elif dsn:
+            found = doctor_pgvector(
+                dsn,
+                table=table,
+                column=column,
+                text_column=text_column,
+                sample_size=sample_size,
+                timeout=timeout,
+            )
+        else:
+            _doctor_fail(
+                "Missing option '--dsn' (or VECSHIFT_DSN).",
+                "Pass a PostgreSQL connection string, or --qdrant URL for Qdrant.",
+            )
+    except NeedsChoice as exc:
+        typer.secho(exc.message, err=True, fg=typer.colors.RED)
+        if exc.candidates:
+            typer.echo(exc.heading, err=True)
+            for c in exc.candidates:
+                dims = f"({c.dimensions})" if c.dimensions else ""
+                typer.echo(f"  {c.name}  {c.type}{dims}", err=True)
+        raise typer.Exit(2) from exc
+    except ServiceError as exc:
+        _doctor_fail(exc.message, exc.hint)
+
+    report, display, kind = found.report, found.connection, found.kind
     if html is not None:
         from vecshift.doctor.html import render_html
 
@@ -287,80 +312,6 @@ def _doctor_fail(message: str, hint: str | None = None) -> NoReturn:
     raise typer.Exit(2)
 
 
-def _candidates(candidates: Sequence[Any], heading: str) -> None:
-    if candidates:
-        typer.echo(heading, err=True)
-        for c in candidates:
-            dims = f"({c.dimensions})" if c.dimensions else ""
-            typer.echo(f"  {c.qualified}  {c.type}{dims}", err=True)
-
-
-def _pg_profile(
-    dsn: str,
-    table: str | None,
-    column: str | None,
-    text_column: str | None,
-    sample_size: int,
-    timeout: int,
-) -> tuple[Any, str, str]:
-    """Profile a pgvector column: (profile, connection shown, connection kind)."""
-    try:
-        from vecshift.connectors import pgvector
-    except ImportError:  # pragma: no cover - a broken install
-        _doctor_fail(
-            "The PostgreSQL driver is missing. Reinstall: pip install --force-reinstall vecshift"
-        )
-
-    try:
-        settings = pgvector.prepare(dsn)
-        conn = pgvector.connect(settings, statement_timeout_s=timeout)
-    except pgvector.ConnectError as exc:
-        _doctor_fail(f"Couldn't connect: {exc}", exc.hint)
-
-    try:
-        profile = pgvector.inspect(
-            conn, table=table, column=column, text_column=text_column, sample_size=sample_size
-        )
-    except pgvector.TargetSelectionError as exc:
-        typer.secho(str(exc), err=True, fg=typer.colors.RED)
-        _candidates(exc.candidates or [], "Vector columns found:")
-        raise typer.Exit(2) from exc
-    except Exception as exc:
-        import psycopg
-
-        if isinstance(exc, psycopg.Error):
-            _doctor_fail(f"Inspection failed: {exc}")
-        raise
-    finally:
-        conn.rollback()
-        conn.close()
-    return profile, settings.display, settings.description
-
-
-def _qdrant_profile(
-    url: str,
-    collection: str | None,
-    vector: str | None,
-    text_field: str | None,
-    sample_size: int,
-    timeout: int,
-) -> tuple[Any, str, str]:
-    """Profile a Qdrant vector: (profile, URL shown, connection kind)."""
-    from vecshift.connectors import qdrant
-
-    try:
-        settings = qdrant.prepare(url)
-        with qdrant.QdrantClient(settings, timeout=float(timeout)) as client:
-            profile = qdrant.inspect(client, collection, vector, text_field, sample_size)
-    except qdrant.SelectionError as exc:
-        typer.secho(str(exc), err=True, fg=typer.colors.RED)
-        _candidates(exc.candidates, "Vectors found:")
-        raise typer.Exit(2) from exc
-    except qdrant.QdrantError as exc:
-        _doctor_fail(str(exc), exc.hint)
-    return profile, settings.display, settings.description
-
-
 from vecshift.cli_bench import bench  # noqa: E402
 
 app.command()(bench)
@@ -386,3 +337,7 @@ app.command(name="eval")(eval_)
 from vecshift.cli_status import status  # noqa: E402
 
 app.command()(status)
+
+from vecshift.cli_serve import serve  # noqa: E402
+
+app.command()(serve)

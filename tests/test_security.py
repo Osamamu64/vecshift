@@ -550,3 +550,55 @@ def test_apply_only_fills_collections_it_created() -> None:
     ]
     assert [h["previous"] for h in history(state, "b", "b2")] == ["b1"]
     assert history(state, "b", "a2") == []
+
+
+# --- REST API
+
+from tests.test_server import fake, jobs  # noqa: E402, F401 - fixtures
+
+
+def test_the_api_never_returns_a_secret(
+    jobs: Path,  # noqa: F811
+    fake: Any,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Plant secrets in every variable vecshift reads, call every endpoint (successes and
+    failures), and look for them in every response."""
+    from fastapi.testclient import TestClient
+
+    from vecshift.server import ServerSettings, create_app
+
+    planted = {
+        "VECSHIFT_DSN": "postgresql://app:pw-PLANTED-dsn@127.0.0.1:1/shop",
+        "QDRANT_API_KEY": "qk-PLANTED-qdrant-key",
+        "OPENAI_API_KEY": "sk-PLANTED-openai-key",
+    }
+    for name, value in planted.items():
+        monkeypatch.setenv(name, value)
+    client = TestClient(create_app(ServerSettings(jobs=jobs)), base_url="http://localhost")
+    post = {"headers": {"X-Vecshift": "1"}}
+    responses = [
+        client.get(path)
+        for path in (
+            "/api/v1/health",
+            "/api/v1/environment",
+            "/api/v1/jobs",
+            "/api/v1/jobs/docs",
+            "/api/v1/jobs/articles",
+            "/api/v1/jobs/docs/plan",
+            "/api/v1/jobs/docs/status?full=true",
+            "/api/v1/jobs/articles/plan",
+            "/api/v1/jobs/articles/status",
+            "/api/v1/jobs/compose",
+            "/api/v1/jobs/missing",
+            "/api/v1/openapi.json",
+        )
+    ] + [
+        client.post("/api/v1/doctor", json={"store": "pgvector"}, **post),
+        client.post("/api/v1/doctor", json={"store": "qdrant", "collection": "docs"}, **post),
+        client.post("/api/v1/doctor", json={"store": "nope", "x": planted["VECSHIFT_DSN"]}, **post),
+    ]
+    assert {r.status_code for r in responses} >= {200, 404, 422, 502}, "failures were reached"
+    for response in responses:
+        for secret in ("pw-PLANTED-dsn", "PLANTED-qdrant-key", "PLANTED-openai-key"):
+            assert secret not in response.text, (response.url, secret)

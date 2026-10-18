@@ -108,6 +108,9 @@ Starts once the CLI covers the full workflow (`doctor`, `bench`, `plan`, `apply`
 `cutover`).
 
 - REST API over the same engine the CLI uses, so both always behave the same
+  - [x] `vecshift serve` with the read-only endpoints: jobs, `plan`, `status`, `doctor`
+    ([REST API](api.md))
+  - [ ] Runs over HTTP (`apply`, `eval`, `cutover`, `rollback`, `cleanup`) with live progress
 - Web UI for running and watching jobs: progress, throughput, errors, and cost
 - Visual views of `doctor` and `bench` reports
 - Guided cutover and rollback

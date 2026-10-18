@@ -65,3 +65,13 @@ def test_the_check_catches_lazy_imports() -> None:
     assert [presentation(m) for _, m in modules(source)] == [True, True, True]
     assert not presentation("vecshift.connectors.qdrant")
     assert not presentation("richer")
+
+
+def test_the_server_is_its_own_front_end() -> None:
+    """The API server sits beside the CLI: it may use the service layer, never the CLI."""
+    bad = [
+        f"{f}:{line} imports {m}"
+        for f, line, m in imports("server")
+        if presentation(m) and not m.startswith("vecshift.server")
+    ]
+    assert not bad, "\n".join(bad)

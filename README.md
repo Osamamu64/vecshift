@@ -257,6 +257,7 @@ produces a different tag, because it's a different vector space.
 - [Qdrant](docs/connectors/qdrant.md): connecting, aliases, what `doctor` checks, and
   migrating into Qdrant
 - [JSON output](docs/json.md): what each command's `--json` prints, for scripts and CI
+- [REST API](docs/api.md) (preview): `vecshift serve`, its endpoints, and who can call it
 - [Architecture](docs/architecture.md): the canonical record, plugin contracts, and capability flags
 - [Roadmap](docs/roadmap.md): what's being built, in what order, and why
 - [Security model](docs/security.md): what vecshift sends, stores, and touches

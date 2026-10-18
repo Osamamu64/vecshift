@@ -115,6 +115,23 @@ the database or a model, and carry a strict Content Security Policy: no network 
 all, and only vecshift's own script, identified by its SHA-256 hash, may run. Even if an escaping bug ever let a name inject
 markup, the browser would refuse to run it or send anything anywhere.
 
+## The REST API
+
+`vecshift serve` (see [REST API](api.md)) follows the same rules, plus some of its own:
+
+- It listens on `127.0.0.1` and answers only requests addressed to localhost, so a web page
+  can't reach it through DNS rebinding. Listening anywhere else needs `VECSHIFT_API_TOKEN`
+  (at least 16 characters), and then every request but the health check needs it.
+- Requests other than GET need the header `X-Vecshift: 1`, and the server sends no CORS
+  headers, so another web page can't make it act.
+- Requests name environment variables, never values, and only variables vecshift reads.
+  Responses never include a value: connection strings are shown without the password, URL
+  query strings as `?…`, and error texts are checked for the values of those variables.
+- Errors never include a traceback; the server logs only the error's type.
+- Probing a remote model needs `allow_remote=true`, the API's form of the CLI's question.
+- `tests/test_security.py` plants secrets in every variable and checks every endpoint's
+  answers for them.
+
 ## Supply chain
 
 - Dependencies are locked with hashes in `uv.lock`, and CI installs with `--locked`.

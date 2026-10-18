@@ -34,3 +34,5 @@ Read `docs/security.md` first. In particular:
 `src/vecshift/core` and `src/vecshift/service` must not import from `vecshift.cli*`,
 `vecshift.ui`, typer, rich, or any other presentation layer (`tests/test_architecture.py`).
 Command logic lives in `vecshift.service` and raises `ServiceError`; CLI commands render.
+`src/vecshift/server` (the REST API) may import the service layer, never the CLI. Responses
+never carry a secret value; `docs/openapi.json` is its contract (see `docs/api.md`).

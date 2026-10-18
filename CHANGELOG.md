@@ -9,6 +9,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- A REST API, as a preview: `vecshift serve --jobs DIR` (install with
+  `pip install "vecshift[server]"`). It serves the job files in a folder, read-only: the
+  jobs list, a job with its state, `plan`, `status`, and `doctor`, returning the same JSON
+  as the CLI's `--json`. Errors are `application/problem+json` with stable codes. It
+  listens on localhost and answers only requests addressed to it; anywhere else needs
+  `VECSHIFT_API_TOKEN`. Requests name environment variables, never values, and responses
+  never contain one. The schema is committed as `docs/openapi.json`. See `docs/api.md`.
+
 - `vecshift init` for Qdrant: guided at a terminal, or `--collection` with `--model` for
   scripts. It also sets up a pgvector table migrating into Qdrant (`--to qdrant`). It asks
   for the Qdrant URL and, if the server needs one, an API key (hidden, saved to `.env` only
@@ -23,8 +31,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - The guided `vecshift init` first asks what to migrate: a pgvector column, a Qdrant
   collection, or a pgvector table into Qdrant.
-- The migration commands (`plan`, `apply`, `status`, `eval`, `cutover`, `rollback`, and
-  `cleanup`) now run through a service layer, `vecshift.service`, which the planned REST
+- The migration commands (`doctor`, `plan`, `apply`, `status`, `eval`, `cutover`,
+  `rollback`, and `cleanup`) now run through a service layer, `vecshift.service`, which the planned REST
   API will share. Their output and exit codes are unchanged. The layer never prompts: it
   asks callbacks before sending text to a remote model or changing anything, and raises
   `ServiceError` with a stable `code` instead of exiting.
