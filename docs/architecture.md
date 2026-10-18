@@ -11,7 +11,7 @@ in code yet.
 └──────────────────────────────────────────────────────────┘
                             │  same YAML job spec
 ┌──────────────────────────────────────────────────────────┐
-│ Service             plan · status · eval · …             │
+│ Service    plan · apply · eval · cutover · rollback · …  │
 └──────────────────────────────────────────────────────────┘
                             │
 ┌──────────────────────────────────────────────────────────┐
@@ -43,13 +43,17 @@ prompts, or exits:
 - **Consent**: before text goes to a model that isn't on this machine, the service asks a
   `Consent` callback, passing which models, at which URLs, and how many texts. The CLI asks
   at the terminal or takes `--yes`; the planned API answers from the request.
-- **Progress** goes to callbacks too, such as eval's `on_step`.
+- **Confirmation**: apply, cutover, and rollback ask a `confirm` callback, passing a notice
+  that says what will change; cleanup's callback must give back the name of what it
+  deletes. Cutover, rollback, and cleanup ask while they hold the job's lock, after their
+  checks, so nothing can change between the question and the switch. No callback means no.
+- **Progress** goes to callbacks too: apply's engine events, and eval's `on_step`.
 
 The CLI commands are thin wrappers that render the result, which keeps the two in step: the
 API planned for Phase 4 will call the same functions. A test
 ([`tests/test_architecture.py`](../tests/test_architecture.py)) keeps typer, rich, and the
-CLI modules out of the service layer. `plan`, `status`, and `eval` go through it today;
-`apply`, `cutover`, `rollback`, and `cleanup` are next.
+CLI modules out of the service layer. Every migration command goes through it: `plan`,
+`apply`, `status`, `eval`, `cutover`, `rollback`, and `cleanup`.
 
 ## Canonical record
 

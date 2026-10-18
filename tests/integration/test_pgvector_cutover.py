@@ -314,7 +314,7 @@ def test_rows_arriving_during_the_switch_are_caught_up(
     db_dsn: str, setup: psycopg.Connection, applied: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A row written after the final catch-up makes the switch retry, not lose it."""
-    import vecshift.cli_cutover as cli_cutover
+    import vecshift.service.switching as switching
     from vecshift.connectors.pgvector import switch as switch_module
 
     real = switch_module.PgSwitch.prepare
@@ -328,7 +328,7 @@ def test_rows_arriving_during_the_switch_are_caught_up(
             setup.execute("INSERT INTO public.documents (content, metadata) VALUES ('gap', '{}')")
 
     monkeypatch.setattr(switch_module.PgSwitch, "prepare", prepare_then_insert)
-    assert cli_cutover.CATCH_UP_TRIES >= 2
+    assert switching.CATCH_UP_TRIES >= 2
     result = run("cutover", applied, db_dsn, "--yes", "--json")
     assert result.exit_code == 0, result.output
     assert json.loads(result.stdout)["caught_up"] == 1
@@ -470,12 +470,12 @@ def test_late_rows_are_embedded_under_the_lock(
     db_dsn: str, setup: psycopg.Connection, applied: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """On a busy table, rows always arrive after the last catch-up; cutover still converges."""
-    import vecshift.cli_cutover as cli_cutover
+    import vecshift.service.switching as switching
     from vecshift.connectors.pgvector import switch as switch_module
 
     real_prepare = switch_module.PgSwitch.prepare
     catch_ups = 0
-    real_catch_up = cli_cutover._catch_up
+    real_catch_up = switching._catch_up
 
     def prepare_then_insert(self: PgSwitch) -> None:
         real_prepare(self)
@@ -490,7 +490,7 @@ def test_late_rows_are_embedded_under_the_lock(
         return real_catch_up(*args)
 
     monkeypatch.setattr(switch_module.PgSwitch, "prepare", prepare_then_insert)
-    monkeypatch.setattr(cli_cutover, "_catch_up", counting)
+    monkeypatch.setattr(switching, "_catch_up", counting)
     result = run("cutover", applied, db_dsn, "--yes", "--json")
     assert result.exit_code == 0, result.output
     assert json.loads(result.stdout)["caught_up"] == 3
@@ -498,3 +498,39 @@ def test_late_rows_are_embedded_under_the_lock(
     assert mismatched(setup, "embedding") == 0
     state = json.loads((applied.parent / ".vecshift" / "documents-reembed.state.json").read_text())
     assert state["tokens"] > 0
+
+
+def test_the_service_switches_only_when_told_to(
+    db_dsn: str, setup: psycopg.Connection, applied: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without a terminal there's nobody to ask: no callback, or a no, changes nothing."""
+    from vecshift.service import Declined, ServiceError
+    from vecshift.service.switching import CleanupNotice, SwitchNotice, cleanup, cutover
+
+    monkeypatch.setenv("VECSHIFT_DSN", db_dsn)
+    before = columns(setup)
+    with pytest.raises(ServiceError) as nobody:
+        cutover(applied)
+    assert nobody.value.code == "confirm.required"
+    with pytest.raises(Declined):
+        cutover(applied, confirm=lambda notice: False)
+    assert columns(setup) == before
+
+    asked: list[SwitchNotice] = []
+
+    def yes(notice: SwitchNotice) -> bool:
+        asked.append(notice)
+        return True
+
+    outcome = cutover(applied, confirm=yes)
+    assert outcome.status == "cut_over" and outcome.to_dict()["live"] == "embedding"
+    assert asked[0].action == "cutover" and asked[0].readiness is not None
+    assert "renames embedding to embedding_old" in asked[0].message
+
+    def wrong(notice: CleanupNotice) -> str:
+        return notice.name.upper()
+
+    with pytest.raises(ServiceError) as mismatch:
+        cleanup(applied, confirm=wrong)
+    assert mismatch.value.code == "confirm.mismatch"
+    assert "embedding_old" in columns(setup), "nothing dropped"
