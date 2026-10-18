@@ -300,31 +300,54 @@ def test_switching_asks_before_changing_or_sending(command: str, changes: list[s
 
 def test_eval_asks_before_sending_queries() -> None:
     """Query text goes to remote models only after confirmation (or --yes)."""
-    import typer
-
     from vecshift.cli_eval import _confirm
+    from vecshift.service import ServiceError
 
     sends = [("openai/text-embedding-3-large", "https://api.openai.com/v1")]
-    with pytest.raises(typer.Exit):
+    with pytest.raises(ServiceError, match="without confirmation"):
         _confirm(sends, 10, yes=False)  # no terminal in tests
-    _confirm(sends, 10, yes=True)
-    _confirm([("ollama/nomic-embed-text", "")], 10, yes=False)
+    assert _confirm(sends, 10, yes=True)
+    assert _confirm([("ollama/nomic-embed-text", "")], 10, yes=False)
+
+
+def test_the_service_never_sends_text_unasked() -> None:
+    """The service layer has no terminal: before text goes to a remote model, it asks the
+    caller's consent callback, and stops if there's none or it says no."""
+    from vecshift.service import Declined, Sending, ServiceError
+    from vecshift.service.consent import ask
+
+    asked: list[Sending] = []
+
+    def no(sending: Sending) -> bool:
+        asked.append(sending)
+        return False
+
+    remote = Sending("eval", (("openai/m", "https://api.openai.com/v1"),), 10, "queries")
+    with pytest.raises(ServiceError, match="without confirmation") as refused:
+        ask(None, remote)
+    assert refused.value.code == "consent.required"
+    with pytest.raises(Declined):
+        ask(no, remote)
+    assert asked == [remote]
+    ask(lambda s: True, remote)
+    local = Sending("probe", (("hash/8", ""),), 16, "rows")
+    ask(None, local)  # nothing leaves the machine: nobody needs asking
 
 
 def test_eval_only_reads() -> None:
     """eval connects read-only, so the database itself rejects any write."""
-    import vecshift.cli_eval as cli_eval
+    import vecshift.service.evaluation as evaluation
 
-    source = Path(cli_eval.__file__).read_text(encoding="utf-8")
+    source = Path(evaluation.__file__).read_text(encoding="utf-8")
     assert "pgvector.connect(settings)" in source and "connect_writer" not in source
 
 
 def test_status_only_reads() -> None:
     """status connects read-only, like eval, and never saves job state. For a migration into
     Qdrant it counts without copying payloads."""
-    import vecshift.cli_status as cli_status
+    import vecshift.service.progress as progress
 
-    source = Path(cli_status.__file__).read_text(encoding="utf-8")
+    source = Path(progress.__file__).read_text(encoding="utf-8")
     assert "pgvector.connect(settings)" in source and "connect_writer" not in source
     assert ".save(" not in source
     assert "read_only=True" in source and "remove_deleted" not in source
@@ -490,9 +513,9 @@ def test_apply_only_fills_collections_it_created() -> None:
     """A migration into Qdrant overwrites and deletes points only in a collection this job
     created (recorded in its state file), and rollback and cleanup use only this job's own
     cutover record, never another job's."""
-    from vecshift.cli_qdrant import history
     from vecshift.connectors.qdrant.writer import QdrantWriter
     from vecshift.migrate import JobState
+    from vecshift.service.qdrant import history
 
     for method in (QdrantWriter.ensure_column, QdrantWriter.remove_deleted):
         assert "self.owned" in inspect.getsource(method)

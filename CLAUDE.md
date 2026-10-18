@@ -31,4 +31,6 @@ Read `docs/security.md` first. In particular:
 
 ## Architecture rule
 
-`src/vecshift/core` must not import from `vecshift.cli` or any other presentation layer.
+`src/vecshift/core` and `src/vecshift/service` must not import from `vecshift.cli*`,
+`vecshift.ui`, typer, rich, or any other presentation layer (`tests/test_architecture.py`).
+Command logic lives in `vecshift.service` and raises `ServiceError`; CLI commands render.

@@ -11,6 +11,10 @@ in code yet.
 └──────────────────────────────────────────────────────────┘
                             │  same YAML job spec
 ┌──────────────────────────────────────────────────────────┐
+│ Service             plan · status · eval · …             │
+└──────────────────────────────────────────────────────────┘
+                            │
+┌──────────────────────────────────────────────────────────┐
 │ Control plane       Planner · State store · Checkpoints  │  (planned)
 └──────────────────────────────────────────────────────────┘
                             │
@@ -26,6 +30,26 @@ in code yet.
 ```
 
 `vecshift.core` sits at the bottom and never imports from the layers above it.
+
+## Service layer
+
+[`vecshift.service`](../src/vecshift/service/__init__.py) is what each command does, without
+a terminal: it loads the job, connects with the settings the job names in the environment,
+and returns a result, such as a `Plan`, a `Status`, or an `EvalReport`. It never prints,
+prompts, or exits:
+
+- **Errors** are a `ServiceError` with a message and a hint for people, and a stable
+  `code` (`env.missing`, `job.invalid`, …) for programs.
+- **Consent**: before text goes to a model that isn't on this machine, the service asks a
+  `Consent` callback, passing which models, at which URLs, and how many texts. The CLI asks
+  at the terminal or takes `--yes`; the planned API answers from the request.
+- **Progress** goes to callbacks too, such as eval's `on_step`.
+
+The CLI commands are thin wrappers that render the result, which keeps the two in step: the
+API planned for Phase 4 will call the same functions. A test
+([`tests/test_architecture.py`](../tests/test_architecture.py)) keeps typer, rich, and the
+CLI modules out of the service layer. `plan`, `status`, and `eval` go through it today;
+`apply`, `cutover`, `rollback`, and `cleanup` are next.
 
 ## Canonical record
 

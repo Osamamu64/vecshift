@@ -13,8 +13,10 @@ from typing import TYPE_CHECKING, Annotated, Any
 import typer
 
 from vecshift import ui
-from vecshift.cli_plan import DEFAULT_JOB, _fail, load
-from vecshift.cli_style import finding_lines
+from vecshift.cli_plan import DEFAULT_JOB
+from vecshift.cli_style import fail as _fail
+from vecshift.cli_style import finding_lines, reports_errors
+from vecshift.service.jobs import into_qdrant, load
 
 if TYPE_CHECKING:
     import psycopg
@@ -192,6 +194,7 @@ def _guarded(run: Any) -> Any:
         raise _fail(f"The database reported an error: {detail}", "Nothing was switched.") from exc
 
 
+@reports_errors
 def cutover(
     job_file: Annotated[Path, typer.Argument(help="The job file.")] = DEFAULT_JOB,
     check: Annotated[
@@ -210,7 +213,7 @@ def cutover(
     """Switch searches to the new vectors: the column name your app uses, or its alias."""
     from vecshift import cli_qdrant
 
-    if cli_qdrant.into_qdrant(job_file):
+    if into_qdrant(job_file):
         cli_qdrant.cutover(
             job_file, check=check, yes=yes, allow_missing=allow_missing, output_json=output_json
         )
@@ -325,6 +328,7 @@ def cutover(
         raise typer.Exit(1)
 
 
+@reports_errors
 def rollback(
     job_file: Annotated[Path, typer.Argument(help="The job file.")] = DEFAULT_JOB,
     yes: Annotated[bool, typer.Option("--yes", "-y", help="Don't ask before switching.")] = False,
@@ -333,7 +337,7 @@ def rollback(
     """Undo a cutover: give the old vectors their column name (or alias) back."""
     from vecshift import cli_qdrant
 
-    if cli_qdrant.into_qdrant(job_file):
+    if into_qdrant(job_file):
         cli_qdrant.rollback(job_file, yes=yes, output_json=output_json)
         return
     from vecshift.connectors.pgvector.switch import PgSwitch
@@ -400,6 +404,7 @@ def rollback(
         ui.console.print()
 
 
+@reports_errors
 def cleanup(
     job_file: Annotated[Path, typer.Argument(help="The job file.")] = DEFAULT_JOB,
     yes: Annotated[
@@ -410,7 +415,7 @@ def cleanup(
     """After cutover, drop the old vectors for good. This can't be undone."""
     from vecshift import cli_qdrant
 
-    if cli_qdrant.into_qdrant(job_file):
+    if into_qdrant(job_file):
         cli_qdrant.cleanup(job_file, yes=yes, output_json=output_json)
         return
     from vecshift.connectors.pgvector.switch import PgSwitch
