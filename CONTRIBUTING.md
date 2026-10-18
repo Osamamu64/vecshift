@@ -89,6 +89,7 @@ src/vecshift/
   eval/        # comparing old and new vectors: queries, scores, latency, the verdict
   connectors/  # one package per store: pgvector and qdrant
   service/     # what each command does, without a terminal; under the CLI and the API
+  server/      # the REST API (vecshift serve), beside the CLI: may use service/, never cli*
   cli.py       # command-line interface
 tests/         # pytest suite
 docs/          # architecture, roadmap, prior art

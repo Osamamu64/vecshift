@@ -7,7 +7,7 @@ in code yet.
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│ Interfaces   CLI  ·  REST API + Web UI (Phase 4)         │
+│ Interfaces   CLI  ·  REST API  ·  Web UI (Phase 4)       │
 └──────────────────────────────────────────────────────────┘
                             │  same YAML job spec
 ┌──────────────────────────────────────────────────────────┐
@@ -52,8 +52,13 @@ prompts, or exits:
 The CLI commands are thin wrappers that render the result, which keeps the two in step: the
 API planned for Phase 4 will call the same functions. A test
 ([`tests/test_architecture.py`](../tests/test_architecture.py)) keeps typer, rich, and the
-CLI modules out of the service layer. Every migration command goes through it: `plan`,
-`apply`, `status`, `eval`, `cutover`, `rollback`, and `cleanup`.
+CLI modules out of the service layer. Every migration command goes through it: `doctor`,
+`plan`, `apply`, `status`, `eval`, `cutover`, `rollback`, and `cleanup`.
+
+The [REST API](api.md) (`vecshift.server`, FastAPI) is a second front end on the same
+functions, beside the CLI: it may import the service layer, never the CLI, and nothing but
+`vecshift serve` imports it. Its endpoints return the CLI's `--json` output, and turn
+`ServiceError` into `application/problem+json` with the same `code`.
 
 ## Canonical record
 

@@ -61,11 +61,16 @@ class Status:
         return {**asdict(self), "filled": self.filled}
 
 
-def status(job_file: Path) -> Status:
-    """Where the job's migration stands. Read-only."""
+def status(job_file: Path, *, full: bool = True) -> Status:
+    """Where the job's migration stands. Read-only.
+
+    ``full`` counts the rows (or points) still missing a vector, which reads the whole
+    table or source. Without it, ``rows`` and ``missing`` are unknown, and a migration
+    that's ready to cut over shows as ``filling``.
+    """
     if read_job(job_file).target.type == "qdrant":
-        return collect_qdrant(job_file)
-    return collect(job_file)
+        return collect_qdrant(job_file, full=full)
+    return collect(job_file, full=full)
 
 
 def _exists(conn: psycopg.Connection, relid: int, column: str) -> bool:
@@ -156,7 +161,7 @@ def _next_qdrant(stage: str, missing: int | None, alias: str) -> str:
     return "Nothing left to do: the new collection is live and the old one is gone."
 
 
-def collect_qdrant(job_file: Path) -> Status:
+def collect_qdrant(job_file: Path, *, full: bool = True) -> Status:
     """Where a migration into Qdrant stands. Read-only, but it reads the whole source."""
     import psycopg
 
@@ -199,7 +204,7 @@ def collect_qdrant(job_file: Path) -> Status:
     if unknown:
         # Cut over from another folder: the old collection isn't known here.
         previous = "unknown (no cutover record in this folder)"
-    if stage in {"filling", "cut_over"} and not unknown:
+    if stage in {"filling", "cut_over"} and not unknown and full:
         found = locate(job_file)
         try:
             previous = found.previous or previous
@@ -244,7 +249,7 @@ def collect_qdrant(job_file: Path) -> Status:
     )
 
 
-def collect(job_file: Path) -> Status:
+def collect(job_file: Path, *, full: bool = True) -> Status:
     """Where a migration within pgvector stands."""
     from vecshift.connectors import pgvector
     from vecshift.connectors.pgvector.inspect import (
@@ -299,7 +304,7 @@ def collect(job_file: Path) -> Status:
         # The new vectors are in the new column until cutover, then under the live name.
         holder = {"filling": layout.target, "conflict": layout.target, "cut_over": live}.get(stage)
         rows = missing = None
-        if holder and text:
+        if holder and text and full:
             rows, missing = _counts(conn, layout.qualified, text, holder)
         index = _index(conn, source.relid, holder) if holder else None
         if stage == "filling" and missing == 0 and (index or job.pg_target.index.value == "none"):
