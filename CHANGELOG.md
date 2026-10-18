@@ -23,6 +23,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - The guided `vecshift init` first asks what to migrate: a pgvector column, a Qdrant
   collection, or a pgvector table into Qdrant.
+- `plan`, `status`, and `eval` now run through a service layer, `vecshift.service`, which
+  the planned REST API will share. Their output and exit codes are unchanged. The layer
+  never prompts: it asks a callback before sending text to a remote model, and raises
+  `ServiceError` with a stable `code` instead of exiting.
 
 ## [0.4.0] - 2026-10-14
 

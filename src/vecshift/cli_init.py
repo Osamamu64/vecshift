@@ -24,7 +24,8 @@ from typing import TYPE_CHECKING, Annotated
 import typer
 
 from vecshift import __version__, ui
-from vecshift.cli_plan import DEFAULT_JOB, _fail
+from vecshift.cli_plan import DEFAULT_JOB
+from vecshift.cli_style import fail as _fail
 
 if TYPE_CHECKING:
     import psycopg

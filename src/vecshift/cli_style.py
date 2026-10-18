@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import functools
 import shutil
 import textwrap
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from typing import ParamSpec, TypeVar
 
 import typer
 
 from vecshift.doctor import Finding, Severity
+
+P = ParamSpec("P")
+R = TypeVar("R")
 
 STYLE = {
     Severity.ERROR: ("✖ ERROR  ", typer.colors.RED, "error"),
@@ -60,3 +65,28 @@ def warn_if_password_on_command_line(ctx: typer.Context, dsn: str | None) -> Non
                 err=True,
                 fg=typer.colors.YELLOW,
             )
+
+
+def fail(message: str, hint: str | None = None) -> typer.Exit:
+    """Print a problem (and what to do about it) to stderr; raise the result to exit 2."""
+    typer.secho(message, err=True, fg=typer.colors.RED)
+    if hint:
+        typer.echo(f"→ {hint}", err=True)
+    return typer.Exit(2)
+
+
+def reports_errors(command: Callable[P, R]) -> Callable[P, R]:
+    """Show the service layer's errors as the CLI always has: exit 2 with the message and
+    hint, or exit 1 when the person said no."""
+    from vecshift.service import Declined, ServiceError
+
+    @functools.wraps(command)
+    def run(*args: P.args, **kwargs: P.kwargs) -> R:
+        try:
+            return command(*args, **kwargs)
+        except Declined as exc:
+            raise typer.Exit(1) from exc
+        except ServiceError as exc:
+            raise fail(exc.message, exc.hint) from exc
+
+    return run

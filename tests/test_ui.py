@@ -111,7 +111,8 @@ def test_styled_eval_bench_and_apply(styled: Console) -> None:
 
 
 def test_styled_status(styled: Console) -> None:
-    from vecshift.cli_status import Status, _render_rich
+    from vecshift.cli_status import _render_rich
+    from vecshift.service import Status
 
     for stage, missing in (("filling", 30), ("ready", 0), ("cut_over", 0), ("conflict", 0)):
         _render_rich(

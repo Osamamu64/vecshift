@@ -88,13 +88,17 @@ src/vecshift/
   migrate/     # the apply loop and its state file, independent of any store
   eval/        # comparing old and new vectors: queries, scores, latency, the verdict
   connectors/  # one package per store: pgvector and qdrant
+  service/     # what each command does, without a terminal; under the CLI and the API
   cli.py       # command-line interface
 tests/         # pytest suite
 docs/          # architecture, roadmap, prior art
 ```
 
-The boundary matters: `vecshift.core` never imports from presentation layers, so the same
-engine can back the CLI, an API, and a UI.
+The boundary matters: `vecshift.core` and `vecshift.service` never import from
+presentation layers (typer, rich, `vecshift.ui`, the `cli*` modules), so the same engine can
+back the CLI, an API, and a UI. `tests/test_architecture.py` enforces it. New command logic
+goes in `vecshift.service`, raising `ServiceError` rather than exiting; the CLI command
+only renders the result.
 
 ## Adding a connector or provider
 

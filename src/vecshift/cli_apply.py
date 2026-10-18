@@ -13,18 +13,11 @@ from typing import TYPE_CHECKING, Annotated, Any
 
 import typer
 
-from vecshift.cli_plan import (
-    DEFAULT_JOB,
-    Prepared,
-    QdrantPrepared,
-    _fail,
-    _money,
-    _size,
-    prepare,
-    prepare_qdrant,
-    read_job,
-)
-from vecshift.cli_style import finding_lines
+from vecshift.cli_plan import DEFAULT_JOB, _money, _size
+from vecshift.cli_style import fail as _fail
+from vecshift.cli_style import finding_lines, reports_errors
+from vecshift.service.jobs import read_job
+from vecshift.service.plan import Prepared, QdrantPrepared, prepare, prepare_qdrant
 
 if TYPE_CHECKING:
     from vecshift.jobs import JobSpec
@@ -273,6 +266,7 @@ def _summary(result: ApplyResult, into_qdrant: bool = False) -> None:
         )
 
 
+@reports_errors
 def apply(
     job_file: Annotated[Path, typer.Argument(help="The job file.")] = DEFAULT_JOB,
     yes: Annotated[bool, typer.Option("--yes", "-y", help="Don't ask before starting.")] = False,

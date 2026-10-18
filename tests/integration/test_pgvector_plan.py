@@ -209,3 +209,49 @@ def test_row_security_that_hides_rows_is_refused(
     assert ("plan.row_security" in finding_ids(data)) is refused
     if refused:
         assert "access.row_security" not in finding_ids(data), "one finding, not two"
+
+
+def test_probe_asks_the_service_caller(
+    db_dsn: str, setup: psycopg.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without a terminal, the service asks its caller before the probe sends rows away."""
+    from vecshift.service import Consent, Declined, Sending, ServiceError, prepare_plan
+
+    create_healthy(setup, rows=200)
+    sent: list[int] = []
+
+    async def post(self: httpx.AsyncClient, url: str, json: dict) -> httpx.Response:  # type: ignore[type-arg]
+        sent.append(len(json["input"]))
+        data = [{"index": i, "embedding": [0.1] * 5} for i in range(len(json["input"]))]
+        return httpx.Response(
+            200,
+            json={"data": data, "usage": {"prompt_tokens": 100}},
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", post)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("VECSHIFT_DSN", db_dsn)
+    path = job_file(tmp_path, "openai/text-embedding-3-small")
+    asked: list[Sending] = []
+
+    def answer(yes: bool) -> Consent:
+        def consent(sending: Sending) -> bool:
+            asked.append(sending)
+            return yes
+
+        return consent
+
+    with pytest.raises(ServiceError) as nobody:
+        prepare_plan(path, probe=True)
+    assert nobody.value.code == "consent.required" and not sent
+    with pytest.raises(Declined):
+        prepare_plan(path, probe=True, consent=answer(False))
+    assert not sent
+    assert asked[0].remote == (("openai/text-embedding-3-small", "https://api.openai.com/v1"),)
+    assert asked[0].count == 16
+
+    result = prepare_plan(path, probe=True, consent=answer(True))
+    assert sent == [16] and result.plan.dimensions_source == "probe"
+    assert prepare_plan(path).plan.dimensions_source != "probe", "no probe, no question"
+    assert len(asked) == 2
