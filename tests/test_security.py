@@ -7,6 +7,7 @@ import json
 import os
 import re
 import stat
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -203,7 +204,7 @@ def test_apply_asks_before_changing_anything(monkeypatch: pytest.MonkeyPatch) ->
     """Without --yes, apply needs a person at a terminal before it writes or sends text."""
     from types import SimpleNamespace
 
-    import vecshift.cli_apply as cli_apply
+    import vecshift.service.apply as service_apply
     from vecshift.connectors import pgvector
     from vecshift.planning.plan import Estimates
 
@@ -222,9 +223,9 @@ def test_apply_asks_before_changing_anything(monkeypatch: pytest.MonkeyPatch) ->
         target=SimpleNamespace(primary_key=("id",)),
         profile=SimpleNamespace(text_field="content"),
     )
-    monkeypatch.setattr(cli_apply, "prepare", lambda job_file: ready)
+    monkeypatch.setattr(service_apply, "prepare", lambda job_file: ready)
     pg_job = SimpleNamespace(target=SimpleNamespace(type="pgvector"))
-    monkeypatch.setattr(cli_apply, "read_job", lambda job_file: pg_job)
+    monkeypatch.setattr(service_apply, "read_job", lambda job_file: pg_job)
 
     def connect(settings: object) -> None:
         raise AssertionError("connected without confirmation")
@@ -289,13 +290,37 @@ def test_switching_asks_before_changing_or_sending(command: str, changes: list[s
 
     The integration tests check that, without --yes, nothing changes.
     """
-    import vecshift.cli_cutover as cli_cutover
+    import vecshift.service.switching as switching
 
-    source = Path(cli_cutover.__file__).read_text(encoding="utf-8")
-    run = source.split(f"def {command}(", 1)[1].split("def run(", 1)[1]
-    asks = run.index("_confirm(") if "_confirm(" in run else run.index("typer.prompt(")
+    source = Path(switching.__file__).read_text(encoding="utf-8")
+    run = source.split(f"def _pg_{command}(", 1)[1].split("def run(", 1)[1]
+    asks = run.index("confirmed(") if "confirmed(" in run else run.index("typed_back(")
     for change in changes:
         assert asks < run.index(change)
+
+
+def test_switches_need_an_answer() -> None:
+    """The service layer never switches or deletes on its own: no callback means no, and
+    cleanup needs the exact name of what it deletes."""
+    from vecshift.service import Declined, ServiceError
+    from vecshift.service.consent import confirmed
+    from vecshift.service.switching import CleanupNotice, typed_back
+
+    with pytest.raises(ServiceError, match="without confirmation"):
+        confirmed(None, "notice", "changing the database")
+    with pytest.raises(Declined):
+        confirmed(lambda notice: False, "notice", "changing the database")
+    notice = CleanupNotice("docs", "embedding_old", "Cleanup drops embedding_old.")
+    with pytest.raises(ServiceError, match="without confirmation"):
+        typed_back(None, notice, "no match")
+
+    def answer(typed: str | None) -> Callable[[CleanupNotice], str | None]:
+        return lambda notice: typed
+
+    for typed in ("", "embedding", "EMBEDDING_OLD", None):
+        with pytest.raises(ServiceError, match="no match"):
+            typed_back(answer(typed), notice, "no match")
+    typed_back(answer("embedding_old"), notice, "no match")
 
 
 def test_eval_asks_before_sending_queries() -> None:
@@ -358,11 +383,11 @@ def test_qdrant_sources_are_only_read() -> None:
     read-only transaction at a time, and writes nothing but the new collection."""
     import inspect
 
-    import vecshift.cli_apply as cli_apply
     import vecshift.connectors.pgvector.reader as reader
+    import vecshift.service.apply as service_apply
     from vecshift.connectors.pgvector import connect_reader
 
-    assert "connect_reader(ready.source_pg)" in Path(cli_apply.__file__).read_text("utf-8")
+    assert "connect_reader(ready.source_pg)" in Path(service_apply.__file__).read_text("utf-8")
     text = Path(reader.__file__).read_text(encoding="utf-8")
     assert "SET TRANSACTION READ ONLY" in text
     for verb in ("INSERT", "UPDATE", "DELETE", "ALTER", "CREATE"):
@@ -373,7 +398,7 @@ def test_qdrant_sources_are_only_read() -> None:
 def test_apply_asks_before_creating_a_qdrant_collection(monkeypatch: pytest.MonkeyPatch) -> None:
     from types import SimpleNamespace
 
-    import vecshift.cli_apply as cli_apply
+    import vecshift.service.apply as service_apply
     from vecshift.connectors import qdrant
     from vecshift.planning.plan import Estimates
 
@@ -392,8 +417,8 @@ def test_apply_asks_before_creating_a_qdrant_collection(monkeypatch: pytest.Monk
         spec=SimpleNamespace(price=None, is_local=False, url="https://api.example.com/v1"),
     )
     q_job = SimpleNamespace(target=SimpleNamespace(type="qdrant"))
-    monkeypatch.setattr(cli_apply, "read_job", lambda job_file: q_job)
-    monkeypatch.setattr(cli_apply, "prepare_qdrant", lambda job_file: ready)
+    monkeypatch.setattr(service_apply, "read_job", lambda job_file: q_job)
+    monkeypatch.setattr(service_apply, "prepare_qdrant", lambda job_file: ready)
 
     def connect(*args: object, **kwargs: object) -> None:
         raise AssertionError("connected without confirmation")
@@ -496,14 +521,13 @@ def test_qdrant_switches_ask_first() -> None:
     """Cutover and rollback for Qdrant need a person (or --yes) before they move an alias;
     cleanup needs the old collection's name typed before it deletes it. eval's Qdrant
     searches only read."""
-    import vecshift.cli_qdrant as cli_qdrant
     import vecshift.connectors.qdrant.search as search
+    import vecshift.service.qdrant as service_qdrant
 
-    text = Path(cli_qdrant.__file__).read_text(encoding="utf-8")
-    assert text.count("_confirm(") == 2, "cutover and rollback both ask"
-    assert "typed != previous" in text and "Not deleting anything without confirmation" in text
-    assert text.index("_confirm(") < text.index("switch.point(")
-    assert text.index("typed != previous") < text.index("delete_collection(")
+    text = Path(service_qdrant.__file__).read_text(encoding="utf-8")
+    assert text.count("confirmed(") == 2, "cutover and rollback both ask"
+    assert text.index("confirmed(") < text.index("switch.point(")
+    assert text.index("typed_back(") < text.index("delete_collection(")
     searches = Path(search.__file__).read_text(encoding="utf-8")
     for write in ("upsert", "batch", "delete", "update_aliases", "create_"):
         assert write not in searches

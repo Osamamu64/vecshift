@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import signal
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 from types import FrameType
 from typing import TYPE_CHECKING, Annotated, Any
@@ -14,15 +14,14 @@ from typing import TYPE_CHECKING, Annotated, Any
 import typer
 
 from vecshift.cli_plan import DEFAULT_JOB, _money, _size
-from vecshift.cli_style import fail as _fail
 from vecshift.cli_style import finding_lines, reports_errors
-from vecshift.service.jobs import read_job
-from vecshift.service.plan import Prepared, QdrantPrepared, prepare, prepare_qdrant
+from vecshift.service import ServiceError
 
 if TYPE_CHECKING:
     from vecshift.jobs import JobSpec
     from vecshift.migrate import ApplyResult, Event, JobState
     from vecshift.planning import Plan
+    from vecshift.service.apply import ApplyNotice
 
 EXIT_STOPPED = 3
 """Stopped on purpose (Ctrl-C or budget): run apply again to continue."""
@@ -288,140 +287,30 @@ def apply(
     ] = False,
 ) -> None:
     """Run (or resume) a migration: add the column, embed every row, and build the index."""
-    import psycopg
+    from vecshift.service.apply import ApplyOptions, PlanBlocked, run_apply
 
-    from vecshift.connectors import qdrant
-    from vecshift.connectors.pgvector.writer import AlreadyRunning, Busy
-    from vecshift.connectors.qdrant.writer import AlreadyRunning as QdrantRunning
-    from vecshift.embeddings import EmbeddingError, create_embedder
-    from vecshift.embeddings.providers import CONCURRENCY
-    from vecshift.migrate import JobState
-
-    into_qdrant = read_job(job_file).target.type == "qdrant"
-    ready: Prepared | QdrantPrepared = (
-        prepare_qdrant(job_file) if into_qdrant else prepare(job_file)
-    )
-    plan, job, spec = ready.plan, ready.job, ready.spec
-    if not plan.ok:
-        typer.secho("The plan has errors, so nothing was changed.", fg=typer.colors.RED, bold=True)
-        finding_lines([f for f in plan.findings if f.severity.rank >= 2])
-        raise typer.Exit(1)
-    if plan.dimensions is None:
-        raise _fail(
-            "The new vector size is unknown.",
-            "Add dims= to the model spec, or check it with: vecshift plan --probe",
-        )
-    if job.limits.budget_usd is not None and spec.price is None:
-        raise _fail(
-            "A budget is set, but the model has no price, so it can't be enforced.",
-            "Add price= (USD per million tokens) to the model spec.",
-        )
-    if isinstance(ready, Prepared) and (
-        len(ready.target.primary_key) != 1 or ready.profile.text_field is None
-    ):
-        raise _fail("Apply needs a single-column primary key and a text column.")
-
-    state = JobState.for_job(job_file, job.name)
-    noun = "collection" if into_qdrant else "column"
-    changes = (
-        f"This creates and fills the collection {plan.target_column.split(':')[0]}"
-        if into_qdrant
-        else f"This changes {plan.source.split()[0]}"
-    )
-    _announce(plan, job, state, output_json, noun)
-    from vecshift import ui
-
-    fancy = ui.fancy() and not output_json
-    where = "your machine" if spec.is_local else spec.url
-    if not yes and fancy:
-        ui.console.print()
-        ui.note(f"  {changes} and sends row text to {where}.")
-        if not ui.confirm("Apply?", default=False):
-            raise typer.Exit(1)
-    elif not yes:
-        typer.echo(f"\n{changes} and sends row text to {where}.", err=True)
-        if not sys.stdin.isatty():
-            raise _fail("Not changing anything without confirmation.", "Pass --yes to proceed.")
-        if not typer.confirm("Apply?", err=True):
-            raise typer.Exit(1)
-
-    index = None
-    if not no_index and job.target.index != "none":
-        index = (str(getattr(job.target.index, "value", job.target.index)), plan.metric)
-
-    closers: list[Any] = []
+    view = _View(yes=yes, output_json=output_json)
     try:
-        writer = (
-            _qdrant_writer(ready, state, plan.dimensions, closers)
-            if isinstance(ready, QdrantPrepared)
-            else _pg_writer(ready, plan.dimensions, closers)
+        outcome = run_apply(
+            job_file,
+            ApplyOptions(no_index=no_index, until=until),
+            confirm=view.confirm,
+            on_start=view.start,
+            on_event=view.event,
+            should_stop=lambda: view.stop.requested,
         )
-    except BaseException:
-        for close in closers:
-            close()
-        raise
-
-    stop = _Stop()
-    previous = signal.signal(signal.SIGINT, stop)
-    if output_json:
-
-        def on_event(event: Event) -> None:
-            typer.echo(json.dumps({"event": event.kind, **event.data}))
-
-    elif fancy:
-        ui.console.print()
-        on_event = _FancyProgress(noun)
-    else:
-        on_event = _Progress(live=sys.stdout.isatty(), noun=noun)
-    removed = 0
-    try:
-        embedder = create_embedder(spec)
-        result = asyncio.run(
-            _run(
-                writer,
-                embedder,
-                state,
-                dims=plan.dimensions,
-                price_per_million=spec.price,
-                budget_usd=job.limits.budget_usd,
-                chunk_rows=spec.batch_size * CONCURRENCY,
-                index=index,
-                on_event=on_event,
-                should_stop=lambda: stop.requested,
-                until=until / 100 if until else None,
-            )
-        )
-        if into_qdrant and result.status == "complete":
-            removed = writer.remove_deleted()
-    except (AlreadyRunning, QdrantRunning) as exc:
-        raise _fail(str(exc), "Wait for it to finish, or stop it first.") from exc
-    except (Busy, EmbeddingError) as exc:
-        raise _fail(f"{exc}", "Progress is saved; run apply again to continue.") from exc
-    except qdrant.QdrantError as exc:
-        hint = exc.hint or "Every finished batch is saved; run apply again to continue."
-        raise _fail(str(exc), hint) from exc
-    except psycopg.Error as exc:
-        detail = str(exc).strip().splitlines()[0] if str(exc).strip() else type(exc).__name__
-        hint = "Every finished batch is saved; run apply again to continue."
-        if "shared memory segment" in detail:
-            hint = (
-                "The parallel index build ran out of shared memory, sized by "
-                "maintenance_work_mem. In Docker, /dev/shm is 64 MB unless the container "
-                "runs with --shm-size (e.g. 2g); or lower maintenance_work_mem. " + hint
-            )
-        raise _fail(f"The database reported an error: {detail}", hint) from exc
+    except PlanBlocked as exc:
+        typer.secho(exc.message, fg=typer.colors.RED, bold=True)
+        finding_lines([f for f in exc.plan.findings if f.severity.rank >= 2])
+        raise typer.Exit(1) from exc
     finally:
-        if isinstance(on_event, _FancyProgress):
-            on_event.close()
-        signal.signal(signal.SIGINT, previous)
-        for close in closers:
-            close()
+        view.close()
 
-    copied = getattr(writer, "payloads_copied", 0)
+    result, into_qdrant = outcome.result, outcome.into_qdrant
     if output_json:
-        extra = {"deleted": removed, "payloads_copied": copied} if into_qdrant else {}
-        typer.echo(json.dumps({"event": "result", **_result_dict(result), **extra}))
+        typer.echo(json.dumps({"event": "result", **outcome.to_dict()}))
     else:
+        removed, copied = outcome.removed, outcome.copied
         if removed or copied:
             parts = []
             if copied:
@@ -429,7 +318,9 @@ def apply(
             if removed:
                 parts.append(f"removed {removed:,} points deleted from the source")
             message = "Also " + " and ".join(parts) + "."
-            if fancy:
+            if view.fancy:
+                from vecshift import ui
+
                 ui.success(message)
             else:
                 typer.echo(message)
@@ -438,6 +329,70 @@ def apply(
         raise typer.Exit(1)
     if result.status in {"stopped", "budget"}:
         raise typer.Exit(EXIT_STOPPED)
+
+
+class _View:
+    """What a person sees of apply: the announcement, the question, and the progress."""
+
+    def __init__(self, *, yes: bool, output_json: bool) -> None:
+        from vecshift import ui
+
+        self.yes = yes
+        self.output_json = output_json
+        self.fancy = ui.fancy() and not output_json
+        self.stop = _Stop()
+        self.noun = "column"
+        self.progress: Callable[[Event], None] | None = None
+        self.previous: Any = None
+        self.started = False
+
+    def confirm(self, notice: ApplyNotice) -> bool:
+        from vecshift import ui
+
+        self.noun = "collection" if notice.into_qdrant else "column"
+        _announce(notice.plan, notice.job, notice.state, self.output_json, self.noun)
+        if self.yes:
+            return True
+        if self.fancy:
+            ui.console.print()
+            ui.note(f"  {notice.message}")
+            return ui.confirm("Apply?", default=False)
+        typer.echo(f"\n{notice.message}", err=True)
+        if not sys.stdin.isatty():
+            raise ServiceError(
+                "Not changing anything without confirmation.",
+                "Pass --yes to proceed.",
+                "confirm.required",
+            )
+        return typer.confirm("Apply?", err=True)
+
+    def start(self) -> None:
+        """Connected and about to change things: Ctrl-C now stops cleanly."""
+        from vecshift import ui
+
+        self.previous = signal.signal(signal.SIGINT, self.stop)
+        self.started = True
+        if self.output_json:
+            self.progress = _json_lines
+        elif self.fancy:
+            ui.console.print()
+            self.progress = _FancyProgress(self.noun)
+        else:
+            self.progress = _Progress(live=sys.stdout.isatty(), noun=self.noun)
+
+    def event(self, event: Event) -> None:
+        if self.progress is not None:
+            self.progress(event)
+
+    def close(self) -> None:
+        if isinstance(self.progress, _FancyProgress):
+            self.progress.close()
+        if self.started:
+            signal.signal(signal.SIGINT, self.previous)
+
+
+def _json_lines(event: Event) -> None:
+    typer.echo(json.dumps({"event": event.kind, **event.data}))
 
 
 def _announce(plan: Plan, job: JobSpec, state: JobState, output_json: bool, noun: str) -> None:
@@ -493,101 +448,3 @@ def _announce(plan: Plan, job: JobSpec, state: JobState, output_json: bool, noun
         )
     if warnings:
         finding_lines(warnings)
-
-
-def _pg_writer(ready: Prepared, dims: int, closers: list[Any]) -> Any:
-    from vecshift.connectors import pgvector
-    from vecshift.connectors.pgvector.writer import Layout, PgWriter
-
-    job = ready.job
-    if ready.profile.text_field is None:  # checked by the caller
-        raise _fail("Apply needs a text column.")
-    layout = Layout(
-        schema=ready.target.source.schema,
-        table=ready.target.source.table,
-        pk=ready.target.primary_key[0],
-        text=ready.profile.text_field,
-        target=job.pg_target.column,
-        vector_type=job.pg_target.vector_type.value,
-        dims=dims,
-        extension_schema=ready.target.extension_schema,
-    )
-    try:
-        conn = pgvector.connect_writer(ready.settings)
-    except pgvector.ConnectError as exc:
-        raise _fail(f"Couldn't connect: {exc}", exc.hint) from exc
-    closers.append(conn.close)
-    return PgWriter(conn, layout)
-
-
-def _qdrant_writer(ready: QdrantPrepared, state: JobState, dims: int, closers: list[Any]) -> Any:
-    from vecshift.connectors import pgvector
-    from vecshift.connectors.qdrant import QdrantClient
-    from vecshift.connectors.qdrant.writer import DISTANCES, Layout, QdrantSource, QdrantWriter
-
-    client = QdrantClient(ready.qdrant)
-    closers.append(client.close)
-    source: Any
-    if ready.source_qdrant is not None:
-        reader = (
-            client if ready.source_qdrant == ready.qdrant else QdrantClient(ready.source_qdrant)
-        )
-        if reader is not client:
-            closers.append(reader.close)
-        if ready.target.live is None:
-            raise _fail("The source collection is unknown.")
-        source = QdrantSource(reader, ready.target.live, ready.text_field, None)
-    else:
-        from vecshift.connectors.pgvector.reader import PgSource
-
-        if ready.source_pg is None or ready.pg is None:
-            raise _fail("The source table is unknown.")
-        try:
-            conn = pgvector.connect_reader(ready.source_pg)
-        except pgvector.ConnectError as exc:
-            raise _fail(f"Couldn't connect: {exc}", exc.hint) from exc
-        closers.append(conn.close)
-        source = PgSource(
-            conn,
-            ready.pg.source.schema,
-            ready.pg.source.table,
-            ready.pg.primary_key[0],
-            ready.text_field,
-        )
-    layout = Layout(
-        collection=ready.target.collection,
-        vector=ready.target.vector,
-        dims=dims,
-        distance=DISTANCES[ready.plan.metric],
-        payload_indexes=ready.target.payload_indexes,
-    )
-    return QdrantWriter(
-        client,
-        source,
-        layout,
-        state.path.with_suffix(".lock"),
-        owned=state.collections,
-        on_create=lambda name: _owns(state, name),
-    )
-
-
-def _owns(state: JobState, collection: str) -> None:
-    """Record a collection this job created, at once, so a crash can't lose the record."""
-    if collection not in state.collections:
-        state.collections.append(collection)
-        state.save()
-
-
-async def _run(writer: Any, embedder: Any, state: Any, **kwargs: Any) -> ApplyResult:
-    from vecshift.migrate import apply as run_apply
-
-    try:
-        return await run_apply(writer, embedder, state, **kwargs)
-    finally:
-        await embedder.aclose()
-
-
-def _result_dict(result: ApplyResult) -> dict[str, Any]:
-    from dataclasses import asdict
-
-    return asdict(result)

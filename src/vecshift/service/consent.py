@@ -1,14 +1,15 @@
-"""Asking before text leaves the machine.
+"""Asking before text leaves the machine, and before anything changes.
 
-The service never prompts. It describes what it's about to send and asks the caller's
-``Consent`` callback: the CLI asks at the terminal (or takes ``--yes``), and the API
-answers from the request's ``allow_remote``.
+The service never prompts. It describes what it's about to do and asks the caller's
+callback: the CLI asks at the terminal (or takes ``--yes``), and the API answers from the
+request (``allow_remote``, ``confirm``).
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import TypeVar
 
 from vecshift.service.errors import Declined, ServiceError
 
@@ -50,3 +51,17 @@ def ask(consent: Consent | None, sending: Sending) -> None:
         )
     if not consent(sending):
         raise Declined("Not sending anything.")
+
+
+N = TypeVar("N")
+
+
+def confirmed(confirm: Callable[[N], bool] | None, notice: N, doing: str) -> None:
+    """Go ahead with a change only if the caller agrees to ``notice``.
+
+    ``doing`` completes "Not … without confirmation", such as "changing the database".
+    """
+    if confirm is None:
+        raise ServiceError(f"Not {doing} without confirmation.", code="confirm.required")
+    if not confirm(notice):
+        raise Declined()

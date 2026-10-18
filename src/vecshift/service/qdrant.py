@@ -1,19 +1,42 @@
-"""Finding a migration into Qdrant as it stands: the new collection, its source, the alias."""
+"""Migrations into Qdrant: finding one as it stands (the new collection, its source, the
+alias), and cutover, rollback, and cleanup.
+
+Cutover catches up with the source, then points the application's alias at the new
+collection in one atomic request; rollback points it back; cleanup deletes the old
+collection once you're sure.
+"""
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar
 
+from vecshift.service.consent import confirmed
 from vecshift.service.errors import ServiceError, first_line
 from vecshift.service.jobs import pg_settings, qdrant_settings, read_job
 from vecshift.service.plan import pg_source
+from vecshift.service.switching import (
+    CATCH_UP_TRIES,
+    CleanupNotice,
+    CleanupOutcome,
+    ConfirmCleanup,
+    ConfirmSwitch,
+    CutoverOutcome,
+    RollbackOutcome,
+    SwitchNotice,
+    typed_back,
+)
+
+R = TypeVar("R")
 
 if TYPE_CHECKING:
     from vecshift.connectors.qdrant import QdrantClient
     from vecshift.connectors.qdrant.switch import QdrantSwitch
+    from vecshift.connectors.qdrant.switch import Readiness as QdrantReadiness
     from vecshift.connectors.qdrant.writer import QdrantWriter
     from vecshift.embeddings import ModelSpec
     from vecshift.jobs import JobSpec
@@ -231,3 +254,268 @@ def record(found: Located, event: str) -> None:
         }
     )
     found.state.save()
+
+
+def _guarded(found: Located, run: Callable[[], R]) -> R:
+    """Turn Qdrant, database, and lock problems into clean messages; always close."""
+    import psycopg
+
+    from vecshift.connectors.qdrant import QdrantError
+    from vecshift.connectors.qdrant.writer import AlreadyRunning
+    from vecshift.embeddings import EmbeddingError
+
+    try:
+        return run()
+    except AlreadyRunning as exc:
+        raise ServiceError(
+            str(exc), "Wait for it to finish, or stop it first.", "job.running"
+        ) from exc
+    except QdrantError as exc:
+        raise ServiceError(str(exc), exc.hint or "Nothing was switched.", "qdrant.error") from exc
+    except EmbeddingError as exc:
+        raise ServiceError(str(exc), "Nothing was switched.", "model.failed") from exc
+    except psycopg.Error as exc:
+        raise ServiceError(
+            f"The database reported an error: {first_line(exc)}",
+            "Nothing was switched.",
+            "database.error",
+        ) from exc
+    finally:
+        found.close()
+
+
+def _catch_up(found: Located) -> tuple[int, int]:
+    """Embed what changed in the source since the last apply, and remove what was deleted.
+
+    Returns (points written, points still missing a vector)."""
+    from vecshift.embeddings import create_embedder
+    from vecshift.embeddings.providers import CONCURRENCY
+    from vecshift.service.apply import run_engine
+
+    spec = found.spec
+    result = asyncio.run(
+        run_engine(
+            found.writer,
+            create_embedder(spec),
+            found.state,
+            dims=found.writer.layout.dims,
+            price_per_million=spec.price,
+            budget_usd=found.job.limits.budget_usd,
+            chunk_rows=spec.batch_size * CONCURRENCY,
+            index=None,
+        )
+    )
+    if result.status not in {"complete", "stopped"}:
+        raise ServiceError(
+            f"The final catch-up stopped: {result.message}",
+            "Nothing was switched.",
+            "cutover.catch_up_failed",
+        )
+    found.writer.remove_deleted()
+    # Count again after deleting: the switch must never leave searches short of points.
+    return result.rows_written, found.writer.pending_count(tuple(found.state.failed))
+
+
+def _differences(found: Located, source: str, target: str) -> int:
+    """Points of ``source`` missing from ``target`` or with different text there. Read-only."""
+    from vecshift.connectors.qdrant.writer import Layout, QdrantSource, QdrantWriter
+
+    lay = found.writer.layout
+    reader = QdrantWriter(
+        found.client,
+        QdrantSource(found.client, source, found.text_field, None),
+        Layout(target, lay.vector, lay.dims, lay.distance),
+        read_only=True,
+    )
+    return reader.pending_count()
+
+
+def cutover(
+    job_file: Path,
+    *,
+    check: bool = False,
+    allow_missing: bool = False,
+    confirm: ConfirmSwitch | None = None,
+) -> CutoverOutcome:
+    """Catch up with the source, then point the alias at the new collection atomically."""
+    found = locate(job_file)
+    state = found.state
+
+    def outcome(
+        status: str, ready: QdrantReadiness, caught_up: int = 0, late: int = 0
+    ) -> CutoverOutcome:
+        return CutoverOutcome(
+            status=status,
+            store="qdrant",
+            job=found.job.name,
+            readiness=ready,
+            live=found.alias,
+            previous=found.previous,
+            new=found.new,
+            table="",
+            model=found.spec.name,
+            caught_up=caught_up,
+            late=late,
+        )
+
+    def run() -> CutoverOutcome:
+        found.writer.acquire()
+        try:
+            ready = found.switch.check()
+            blocked = any(
+                f.severity.rank == 3 and f.id != "cutover.pending" for f in ready.findings
+            )
+            if check or blocked:
+                return outcome("ready" if ready.ok else "blocked", ready)
+            where = "your machine" if found.spec.is_local else found.spec.url
+            sends = (
+                f" First it embeds {ready.pending:,} points that changed since the last "
+                f"apply, sending their text to {where}."
+                if ready.pending
+                else ""
+            )
+            now = f" (now {found.previous})" if found.previous else ""
+            message = (
+                f"Cutover points the alias {found.alias}{now} at {found.new}, so searches "
+                f"use {found.spec.name} vectors.{sends} Switch your application to "
+                f"{found.spec.name} at the same time."
+            )
+            notice = SwitchNotice("cutover", found.job.name, message, ready)
+            confirmed(confirm, notice, "changing the database")
+            caught_up = 0
+            for _ in range(CATCH_UP_TRIES):
+                written, remaining = _catch_up(found)
+                caught_up += written
+                if not remaining:
+                    break
+            else:
+                raise ServiceError(
+                    f"{remaining:,} points still have no new vector.",
+                    "Points keep changing; try again when writes are quieter.",
+                    "cutover.pending",
+                )
+            if state.failed and not allow_missing:
+                raise ServiceError(
+                    f"The provider rejected {len(state.failed):,} points, which would be "
+                    "missing from the new collection.",
+                    "Fix their text, or pass --allow-missing.",
+                    "cutover.rejected",
+                )
+            found.switch.point(found.new)
+            record(found, "cutover")
+            late = (
+                _differences(found, found.previous, found.new)
+                if found.from_qdrant and found.same_server and found.previous
+                else 0
+            )
+            return outcome("cut_over", ready, caught_up, late)
+        finally:
+            found.writer.release()
+
+    return _guarded(found, run)
+
+
+def rollback(job_file: Path, *, confirm: ConfirmSwitch | None = None) -> RollbackOutcome:
+    """Point the alias back at the collection it named before cutover."""
+    found = locate(job_file)
+
+    def run() -> int:
+        found.writer.acquire()
+        try:
+            if found.switch.stage() != "cut_over":
+                raise ServiceError(
+                    "There's no cutover to roll back.",
+                    f"The alias {found.alias or '(none)'} doesn't point at {found.new}.",
+                    "rollback.no_cutover",
+                )
+            previous = found.previous
+            recorded = [
+                h
+                for h in history(found.state, found.alias, found.new)
+                if h.get("event") == "cutover"
+            ]
+            if not previous and not recorded:
+                raise ServiceError(
+                    "This folder has no record of the cutover, so vecshift doesn't know "
+                    "which collection to point the alias back at.",
+                    "Run rollback from the folder where you ran cutover (its record is in "
+                    ".vecshift/), or move the alias yourself.",
+                    "state.no_record",
+                )
+            if not previous:
+                raise ServiceError(
+                    "Before cutover the alias didn't exist, so there's nothing to point it "
+                    "back at.",
+                    "To stop using Qdrant, point your application back at its previous "
+                    "store; the source was never changed.",
+                    "rollback.no_previous",
+                )
+            if not found.client.exists(previous):
+                raise ServiceError(
+                    f"The old collection {previous} no longer exists.", code="rollback.gone"
+                )
+            message = (
+                f"Rollback points the alias {found.alias} back at {previous}, so searches use "
+                "the old vectors again. Switch your application back to the old model at "
+                "the same time."
+            )
+            notice = SwitchNotice("rollback", found.job.name, message)
+            confirmed(confirm, notice, "changing the database")
+            found.switch.point(previous)
+            record(found, "rollback")
+            if found.from_qdrant and found.same_server:
+                return _differences(found, found.new, previous)
+            return 0
+        finally:
+            found.writer.release()
+
+    changed = _guarded(found, run)
+    return RollbackOutcome(
+        "qdrant", found.job.name, found.alias, found.previous, found.new, "", changed
+    )
+
+
+def cleanup(job_file: Path, *, confirm: ConfirmCleanup | None = None) -> CleanupOutcome:
+    """Delete the collection the alias named before cutover."""
+    found = locate(job_file)
+    previous = found.previous
+
+    def run() -> str:
+        found.writer.acquire()
+        try:
+            if found.switch.stage() != "cut_over":
+                raise ServiceError(
+                    "There's no cutover to clean up after.",
+                    "Cleanup deletes the old collection once the alias points at the new one.",
+                    "cleanup.no_cutover",
+                )
+            if not previous:
+                raise ServiceError(
+                    "vecshift doesn't know of an old collection to delete: either the alias "
+                    "didn't exist before cutover, or this folder has no record of it.",
+                    "Delete the old collection yourself when you're sure. A pgvector source "
+                    "table is untouched; drop it yourself too.",
+                    "cleanup.no_previous",
+                )
+            if previous == found.new or previous in dict(found.client.aliases()).values():
+                raise ServiceError(
+                    f"{previous} is still in use, so it won't be deleted.", code="cleanup.in_use"
+                )
+            if not found.client.exists(previous):
+                raise ServiceError(f"{previous} is already gone.", code="cleanup.gone")
+            message = (
+                f"Cleanup deletes the collection {previous} and every point in it. The "
+                "old vectors are gone for good, and rollback is no longer possible."
+            )
+            typed_back(
+                confirm,
+                CleanupNotice(found.job.name, previous, message, "qdrant"),
+                "That didn't match, so nothing was deleted.",
+            )
+            found.client.delete_collection(previous)
+            record(found, "cleanup")
+            return previous
+        finally:
+            found.writer.release()
+
+    return CleanupOutcome("qdrant", found.job.name, _guarded(found, run))
