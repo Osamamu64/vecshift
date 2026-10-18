@@ -4,9 +4,8 @@
 its JSON is the CLI's `--json` output. It's the base for the web UI, scripts, and other
 tools.
 
-> **Preview.** This release has the read-only endpoints: jobs, `plan`, `status`, and
-> `doctor`. Running `apply`, `eval`, `cutover`, `rollback`, and `cleanup` over HTTP, with
-> live progress, comes next.
+> **Preview.** The endpoints may still change before 0.5.0. Editing job files and `bench`
+> over HTTP come next.
 
 ## Running it
 
@@ -88,6 +87,91 @@ request can't make the server read any other variable. When the table has severa
 columns (or the Qdrant collection several vectors), the answer is **409** with
 `candidates` to choose from.
 
+## Runs
+
+`apply`, `eval`, `cutover`, `rollback`, and `cleanup` take a while, so they run in the
+background: you start a run, then follow its events.
+
+| Method | Path | Returns |
+|---|---|---|
+| POST | `/jobs/{name}/runs` | **202** `{run_id, links}`: the run started. **409** `job.running` if the job already has one |
+| GET | `/jobs/{name}/runs` | The job's runs, newest first |
+| GET | `/runs/{run_id}` | `run_id`, `job`, `action`, `state`, `started_at`, `finished_at`, `result`, `problem`, and `events` (how many so far) |
+| GET | `/runs/{run_id}/events` | The run's events as [server-sent events](#events) |
+| POST | `/runs/{run_id}/stop` | **202**: apply stops after the current batch, like the first Ctrl-C |
+| GET | `/runs/{run_id}/report` | eval's HTML report, as `vecshift eval --html` writes it; `?format=json` for its JSON |
+
+A run's `state` is `queued`, `running`, `stopping`, then `completed`, `stopped` (apply
+stopped by request or by the budget: run it again to continue), or `failed` (`problem` says
+why). When it's finished, `result` is the same JSON as the command's `--json` output:
+apply's last line, or the whole report for eval.
+
+### Starting one
+
+```console
+$ curl -s -X POST localhost:8765/api/v1/jobs/docs-reembed/runs -H 'X-Vecshift: 1' \
+    -H 'content-type: application/json' \
+    -d '{"action": "apply", "confirm": {"apply": true}, "allow_remote": true}'
+{"run_id": "01JAB…", "links": {"self": "/api/v1/runs/01JAB…", "events": "…/events", "stop": "…/stop"}}
+```
+
+The body has the `action`, its `options` (the CLI's flags), and the confirmation it needs.
+Nothing starts without it: a missing confirmation is a **422** (`confirm.required`).
+
+| Action | `options` | Needs |
+|---|---|---|
+| `apply` | `no_index`, `until` (percent) | `confirm.apply: true`: it changes the database and spends money |
+| `eval` | `num_queries`, `queries` (labeled queries inline: `[{"query", "relevant": [ids]}]`), `generate_queries`, `cross_language`, `old_model`, `group_by`, `neighbours`, `tolerance`, `min_slice`, `max_p95_ms`, `max_slowdown`, `seed` | nothing: it only reads |
+| `cutover` | `check_only`, `allow_missing` | `confirm.switch: true`, unless `check_only` |
+| `rollback` | none | `confirm.switch: true` |
+| `cleanup` | none | `confirm.name`: the old column or collection it deletes, which must match what vecshift computes from the job's own record (`previous` in the job's status) |
+
+**Text sent away.** apply sends every row's text to the job's model, eval sends queries to
+the old and new models (and the chat model with `generate_queries`), and cutover first
+embeds the rows that changed since the last apply. When any of those models isn't on this
+machine, the request needs `"allow_remote": true`; without it the answer is a **422**
+(`consent.required`) naming where the text would go, and nothing starts. (For cutover the
+run fails before it changes anything, as it only knows once it has checked.)
+
+**One at a time.** A job has at most one active run. The stores' own locks still keep a
+CLI command and a run from working on the same job at once.
+
+### Events
+
+`GET /runs/{run_id}/events` is a stream of server-sent events. Each has an increasing `id`;
+to pick up where you left off, reconnect with `Last-Event-ID` (browsers do it on their own)
+or `?after=N`. The stream ends once the run has finished and every event was sent, and a
+comment line every 15 seconds keeps proxies from closing a quiet stream.
+
+```
+id: 3
+event: start
+data: {"pending": 3000, "spent_before": 0.0}
+
+id: 4
+event: batch
+data: {"pass": 1, "written": 256, "skipped": 0, "failed": 0, "rows_written": 256, "spent_usd": 0.0}
+```
+
+| Event | From | `data` |
+|---|---|---|
+| `column`, `trigger`, `start`, `batch`, `pass`, `index`, `done` | apply | exactly what `apply --json` prints, line by line |
+| `step` | eval | `{"message": "Embedding queries"}`: what it's doing now |
+| `finding` | cutover | a readiness check, as in `cutover --json`'s `findings` |
+| `switched` | cutover, rollback | which names now point where |
+| `deleted` | cleanup | `{"name": …}` |
+| `result` | every action | the same JSON as the command's `--json`; the last event of a run that worked |
+| `error` | every action | a problem (`code`, `detail`, `hint`); the last event of a run that failed |
+
+### Runs on disk
+
+Each run's events go to `.vecshift/runs/<run_id>.jsonl` in the jobs folder as they happen,
+and its summary to `<run_id>.json` (and eval's report to `<run_id>.html`), readable by
+their owner only. They hold counts, names, and messages, never document text or secrets.
+After a restart the server still lists and streams old runs; a run that was still going
+when the server stopped is marked `failed` (`run.interrupted`). Every operation is
+resumable, so running it again picks up where it stopped.
+
 ## Errors
 
 Errors are [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) `application/problem+json`.
@@ -108,16 +192,17 @@ Errors are [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) `application/probl
 |---|---|
 | 401 | `request.unauthorized`: the token is missing or wrong |
 | 403 | `request.header`: `X-Vecshift: 1` is missing |
-| 404 | `job.missing`, `source.not_found` |
-| 409 | `env.missing`, `source.ambiguous`, `job.running`, `plan.errors`, `eval.not_applied`, `state.no_record` |
+| 404 | `job.missing`, `run.missing`, `report.missing`, `source.not_found` |
+| 409 | `env.missing`, `source.ambiguous`, `job.running`, `run.finished`, `run.not_stoppable`, `plan.errors`, `eval.not_applied`, `state.no_record` |
 | 413 | `request.too_large` |
 | 421 | `request.host`: addressed to a name other than localhost, without a token |
-| 422 | `request.invalid` (with `errors`), `job.invalid`, `options.invalid`, `consent.required`, `confirm.required`, `source.unsupported` |
+| 422 | `request.invalid` (with `errors`), `job.invalid`, `options.invalid`, `consent.required`, `confirm.required`, `confirm.mismatch`, `source.unsupported` |
 | 500 | `internal`: a bug; the server logs the error's type, never its message |
 | 502 | `connect.failed`, `database.error`, `qdrant.error`, `model.failed` |
 | 503 | `database.busy` |
 
-Other codes may appear with status 400; `code` is the field to rely on.
+Other codes may appear with status 400; `code` is the field to rely on. A failed run
+carries the same `code` in its `problem` and its `error` event.
 
 ## Compatibility
 

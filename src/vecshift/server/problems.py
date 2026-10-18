@@ -23,6 +23,10 @@ QUERY = re.compile(r"(https?://[^\s?#'\",()]+)\?[^\s'\",()]*")
 
 STATUS = {
     "job.missing": 404,
+    "run.missing": 404,
+    "report.missing": 404,
+    "run.finished": 409,
+    "run.not_stoppable": 409,
     "source.not_found": 404,
     "job.invalid": 422,
     "job.wrong_store": 422,

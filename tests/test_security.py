@@ -598,6 +598,31 @@ def test_the_api_never_returns_a_secret(
         client.post("/api/v1/doctor", json={"store": "qdrant", "collection": "docs"}, **post),
         client.post("/api/v1/doctor", json={"store": "nope", "x": planted["VECSHIFT_DSN"]}, **post),
     ]
+    # Runs: one that fails connecting with the planted connection string, and one that
+    # works; their summaries, events, and problems.
+    import time
+
+    for job, body in (
+        ("articles", {"action": "apply", "confirm": {"apply": True}, "allow_remote": True}),
+        ("docs", {"action": "cutover", "options": {"check_only": True}}),
+    ):
+        started = client.post(f"/api/v1/jobs/{job}/runs", json=body, **post)
+        assert started.status_code == 202, started.text
+        run_id = started.json()["run_id"]
+        deadline = time.monotonic() + 60
+        while client.get(f"/api/v1/runs/{run_id}").json()["state"] in {"queued", "running"}:
+            assert time.monotonic() < deadline
+            time.sleep(0.05)
+        responses += [
+            client.get(f"/api/v1/runs/{run_id}"),
+            client.get(f"/api/v1/runs/{run_id}/events"),
+            client.get(f"/api/v1/jobs/{job}/runs"),
+        ]
+    assert '"code":"connect.failed"' in responses[-6].text.replace(" ", "")
+    runs = jobs / ".vecshift" / "runs"
+    on_disk = "".join(f.read_text(encoding="utf-8") for f in runs.iterdir())
+    for secret in ("pw-PLANTED-dsn", "PLANTED-qdrant-key", "PLANTED-openai-key"):
+        assert secret not in on_disk, secret
     assert {r.status_code for r in responses} >= {200, 404, 422, 502}, "failures were reached"
     for response in responses:
         for secret in ("pw-PLANTED-dsn", "PLANTED-qdrant-key", "PLANTED-openai-key"):

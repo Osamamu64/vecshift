@@ -6,20 +6,27 @@ blocks on databases and models, and one slow request mustn't stall the others.
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
+import re
+import time
+from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, FastAPI, Query, Request
+from fastapi import APIRouter, Body, FastAPI, Header, Query, Request
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.exceptions import HTTPException
-from starlette.responses import JSONResponse, Response
+from starlette.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 
 from vecshift import __version__
+from vecshift.server.actions import RunRequest, prepare
 from vecshift.server.folder import JobFolder
 from vecshift.server.guard import Guard
 from vecshift.server.problems import environment_values, from_service, problem
+from vecshift.server.runs import Busy, Registry, Run
 from vecshift.server.settings import ServerSettings
 from vecshift.service import Sending, ServiceError
 
@@ -118,6 +125,53 @@ class DoctorRequest(BaseModel):
     timeout: int = Field(60, ge=1, le=600, description="Seconds.")
 
 
+class RunStarted(BaseModel):
+    run_id: str
+    links: dict[str, str]
+
+
+class RunInfo(BaseModel):
+    run_id: str
+    job: str
+    action: Literal["apply", "eval", "cutover", "rollback", "cleanup"]
+    state: Literal["queued", "running", "stopping", "completed", "stopped", "failed"]
+    started_at: str
+    finished_at: str | None
+    result: dict[str, Any] | None = Field(
+        description="The same JSON as the command's --json output, once it's finished."
+    )
+    problem: dict[str, Any] | None = Field(description="Why the run failed.")
+    events: int = Field(description="How many events the run has sent so far.")
+
+
+class Runs(BaseModel):
+    runs: list[RunInfo]
+
+
+HEARTBEAT = 15.0
+CSP = re.compile(r'<meta http-equiv="Content-Security-Policy" content="([^"]+)">')
+
+
+def _event_id(header: str | None) -> int:
+    return int(header) if header and header.isdigit() else 0
+
+
+async def _stream(run: Run, last: int) -> AsyncIterator[str]:
+    """Server-sent events: each event once, a comment now and then to keep proxies open."""
+    quiet = time.monotonic()
+    while True:
+        for event in run.after(last):
+            data = json.dumps(event.data)
+            yield f"id: {event.id}\nevent: {event.kind}\ndata: {data}\n\n"
+            last, quiet = event.id, time.monotonic()
+        if not run.active and not run.after(last):
+            return
+        if time.monotonic() - quiet >= HEARTBEAT:
+            yield ": keep-alive\n\n"
+            quiet = time.monotonic()
+        await asyncio.to_thread(run.wait, last, 1.0)
+
+
 PROBLEMS: dict[int | str, dict[str, Any]] = {
     status: {"description": "A problem (RFC 9457).", "content": {"application/problem+json": {}}}
     for status in (404, 409, 422, 502)
@@ -126,6 +180,7 @@ PROBLEMS: dict[int | str, dict[str, Any]] = {
 
 def create_app(settings: ServerSettings) -> FastAPI:
     folder = JobFolder(settings.jobs)
+    registry = Registry(settings.jobs)
     app = FastAPI(
         title="vecshift",
         version="1",
@@ -290,7 +345,103 @@ def create_app(settings: ServerSettings) -> FastAPI:
             )
         return found.to_dict()
 
+    def find(run_id: str) -> Run:
+        run = registry.get(run_id)
+        if run is None:
+            raise ServiceError(f"There's no run {run_id!r}.", code="run.missing")
+        return run
+
+    @router.post("/jobs/{name}/runs", status_code=202)
+    def start_run(name: str, request: Annotated[RunRequest, Body()]) -> RunStarted:
+        """Start apply, eval, cutover, rollback, or cleanup in the background.
+
+        The confirmation each needs (`confirm.apply`, `confirm.switch`, or `confirm.name`)
+        and `allow_remote` are checked first: a missing one is a 422, and nothing starts.
+        """
+        work, stoppable = prepare(request, folder.path(name), secrets())
+        try:
+            run = registry.start(name, request.action, work, stoppable=stoppable)
+        except Busy as exc:
+            raise ServiceError(
+                str(exc), "Wait for it to finish, or stop it.", "job.running"
+            ) from exc
+        base = f"{API}/runs/{run.run_id}"
+        return RunStarted(
+            run_id=run.run_id,
+            links={"self": base, "events": f"{base}/events", "stop": f"{base}/stop"},
+        )
+
+    @router.get("/jobs/{name}/runs")
+    def job_runs(name: str) -> Runs:
+        """This job's runs, newest first."""
+        folder.path(name)
+        return Runs(runs=[RunInfo(**r.to_dict()) for r in registry.for_job(name)])
+
+    @router.get("/runs/{run_id}")
+    def run_info(run_id: str) -> RunInfo:
+        return RunInfo(**find(run_id).to_dict())
+
+    @router.post("/runs/{run_id}/stop", status_code=202)
+    def stop(run_id: str) -> RunInfo:
+        """Ask apply to stop after the current batch, like the first Ctrl-C. Run it again
+        to continue where it stopped."""
+        run = find(run_id)
+        if not run.active:
+            raise ServiceError("That run has already finished.", code="run.finished")
+        if not run.stoppable:
+            raise ServiceError(
+                f"{run.action} can't stop halfway; wait for it to finish.",
+                code="run.not_stoppable",
+            )
+        with run.changed:
+            run.stop_requested = True
+            run.state = "stopping"
+        run.save()
+        return RunInfo(**run.to_dict())
+
+    @router.get(
+        "/runs/{run_id}/events",
+        response_class=StreamingResponse,
+        responses={200: {"content": {"text/event-stream": {}}}},
+    )
+    async def events(
+        run_id: str,
+        last_event_id: Annotated[str | None, Header()] = None,
+        after: Annotated[int | None, Query(ge=0)] = None,
+    ) -> StreamingResponse:
+        """The run's events as server-sent events, from the start or after `Last-Event-ID`
+        (or `after`). The stream ends once the run has finished and every event was sent."""
+        run = find(run_id)
+        last = after if after is not None else _event_id(last_event_id)
+        return StreamingResponse(
+            _stream(run, last),
+            media_type="text/event-stream",
+            headers={"X-Accel-Buffering": "no"},
+        )
+
+    @router.get(
+        "/runs/{run_id}/report",
+        response_model=None,
+        responses={200: {"content": {"text/html": {}, "application/json": {}}}},
+    )
+    def report(run_id: str, format: Literal["html", "json"] = "html") -> Response:
+        """eval's report: the same HTML as `vecshift eval --html`, or its JSON."""
+        run = find(run_id)
+        if run.action != "eval" or run.state != "completed":
+            raise ServiceError("Only a completed eval run has a report.", code="report.missing")
+        if format == "json":
+            return JSONResponse(run.result)
+        try:
+            page = run.report_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise ServiceError("This run's report is gone.", code="report.missing") from exc
+        # The report allows only its own script; the server's stricter default would block it.
+        found = CSP.search(page)
+        headers = {"Content-Security-Policy": found.group(1)} if found else None
+        return HTMLResponse(page, headers=headers)
+
     app.include_router(router)
+    app.state.registry = registry
 
     @app.get("/", include_in_schema=False)
     def root() -> Response:

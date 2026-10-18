@@ -437,10 +437,559 @@
           }
         }
       }
+    },
+    "/api/v1/jobs/{name}/runs": {
+      "post": {
+        "summary": "Start Run",
+        "description": "Start apply, eval, cutover, rollback, or cleanup in the background.\n\nThe confirmation each needs (`confirm.apply`, `confirm.switch`, or `confirm.name`)\nand `allow_remote` are checked first: a missing one is a 422, and nothing starts.",
+        "operationId": "start_run_api_v1_jobs__name__runs_post",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/ApplyRun"
+                  },
+                  {
+                    "$ref": "#/components/schemas/EvalRun"
+                  },
+                  {
+                    "$ref": "#/components/schemas/CutoverRun"
+                  },
+                  {
+                    "$ref": "#/components/schemas/RollbackRun"
+                  },
+                  {
+                    "$ref": "#/components/schemas/CleanupRun"
+                  }
+                ],
+                "title": "Request"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunStarted"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          },
+          "409": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          },
+          "422": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          },
+          "502": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "Job Runs",
+        "description": "This job's runs, newest first.",
+        "operationId": "job_runs_api_v1_jobs__name__runs_get",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Runs"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          },
+          "409": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          },
+          "422": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          },
+          "502": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/runs/{run_id}": {
+      "get": {
+        "summary": "Run Info",
+        "operationId": "run_info_api_v1_runs__run_id__get",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunInfo"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          },
+          "409": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          },
+          "422": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          },
+          "502": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/runs/{run_id}/stop": {
+      "post": {
+        "summary": "Stop",
+        "description": "Ask apply to stop after the current batch, like the first Ctrl-C. Run it again\nto continue where it stopped.",
+        "operationId": "stop_api_v1_runs__run_id__stop_post",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunInfo"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          },
+          "409": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          },
+          "422": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          },
+          "502": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/runs/{run_id}/events": {
+      "get": {
+        "summary": "Events",
+        "description": "The run's events as server-sent events, from the start or after `Last-Event-ID`\n(or `after`). The stream ends once the run has finished and every event was sent.",
+        "operationId": "events_api_v1_runs__run_id__events_get",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "After"
+            }
+          },
+          {
+            "name": "last-event-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last-Event-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "text/event-stream": {}
+            }
+          },
+          "404": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          },
+          "409": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          },
+          "422": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          },
+          "502": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/runs/{run_id}/report": {
+      "get": {
+        "summary": "Report",
+        "description": "eval's report: the same HTML as `vecshift eval --html`, or its JSON.",
+        "operationId": "report_api_v1_runs__run_id__report_get",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "html",
+                "json"
+              ],
+              "type": "string",
+              "default": "html",
+              "title": "Format"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              },
+              "text/html": {}
+            }
+          },
+          "404": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          },
+          "409": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          },
+          "422": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          },
+          "502": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          }
+        }
+      }
     }
   },
   "components": {
     "schemas": {
+      "ApplyOptions": {
+        "properties": {
+          "no_index": {
+            "type": "boolean",
+            "title": "No Index",
+            "description": "Backfill only; build the index on a later run.",
+            "default": false
+          },
+          "until": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 99.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Until",
+            "description": "Stop once this percentage has a new vector."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "ApplyOptions"
+      },
+      "ApplyRun": {
+        "properties": {
+          "confirm": {
+            "$ref": "#/components/schemas/Confirm"
+          },
+          "allow_remote": {
+            "type": "boolean",
+            "title": "Allow Remote",
+            "description": "Allow sending text to a model that isn't on this machine.",
+            "default": false
+          },
+          "action": {
+            "type": "string",
+            "const": "apply",
+            "title": "Action"
+          },
+          "options": {
+            "$ref": "#/components/schemas/ApplyOptions"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "action"
+        ],
+        "title": "ApplyRun"
+      },
+      "CleanupRun": {
+        "properties": {
+          "confirm": {
+            "$ref": "#/components/schemas/Confirm"
+          },
+          "allow_remote": {
+            "type": "boolean",
+            "title": "Allow Remote",
+            "description": "Allow sending text to a model that isn't on this machine.",
+            "default": false
+          },
+          "action": {
+            "type": "string",
+            "const": "cleanup",
+            "title": "Action"
+          },
+          "options": {
+            "$ref": "#/components/schemas/Empty"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "action"
+        ],
+        "title": "CleanupRun"
+      },
+      "Confirm": {
+        "properties": {
+          "apply": {
+            "type": "boolean",
+            "title": "Apply",
+            "description": "apply: it changes the database and spends money.",
+            "default": false
+          },
+          "switch": {
+            "type": "boolean",
+            "title": "Switch",
+            "description": "cutover and rollback: they switch searches.",
+            "default": false
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 256
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name",
+            "description": "cleanup: the name of the old column or collection it deletes."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "Confirm"
+      },
+      "CutoverOptions": {
+        "properties": {
+          "check_only": {
+            "type": "boolean",
+            "title": "Check Only",
+            "description": "Only check that cutover is safe.",
+            "default": false
+          },
+          "allow_missing": {
+            "type": "boolean",
+            "title": "Allow Missing",
+            "description": "Switch even though the provider rejected some rows.",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "CutoverOptions"
+      },
+      "CutoverRun": {
+        "properties": {
+          "confirm": {
+            "$ref": "#/components/schemas/Confirm"
+          },
+          "allow_remote": {
+            "type": "boolean",
+            "title": "Allow Remote",
+            "description": "Allow sending text to a model that isn't on this machine.",
+            "default": false
+          },
+          "action": {
+            "type": "string",
+            "const": "cutover",
+            "title": "Action"
+          },
+          "options": {
+            "$ref": "#/components/schemas/CutoverOptions"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "action"
+        ],
+        "title": "CutoverRun"
+      },
       "DoctorRequest": {
         "properties": {
           "store": {
@@ -549,6 +1098,12 @@
         ],
         "title": "DoctorRequest"
       },
+      "Empty": {
+        "properties": {},
+        "additionalProperties": false,
+        "type": "object",
+        "title": "Empty"
+      },
       "Environment": {
         "properties": {
           "variables": {
@@ -564,6 +1119,151 @@
           "variables"
         ],
         "title": "Environment"
+      },
+      "EvalOptions": {
+        "properties": {
+          "num_queries": {
+            "type": "integer",
+            "maximum": 10000.0,
+            "minimum": 5.0,
+            "title": "Num Queries",
+            "default": 200
+          },
+          "queries": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/LabeledQuery"
+                },
+                "type": "array",
+                "maxItems": 10000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Queries",
+            "description": "Labeled queries, instead of a file."
+          },
+          "generate_queries": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Generate Queries",
+            "description": "A chat model that writes the queries."
+          },
+          "cross_language": {
+            "type": "boolean",
+            "title": "Cross Language",
+            "default": false
+          },
+          "old_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Old Model"
+          },
+          "group_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Group By"
+          },
+          "neighbours": {
+            "type": "integer",
+            "maximum": 5000.0,
+            "minimum": 0.0,
+            "title": "Neighbours",
+            "default": 100
+          },
+          "tolerance": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Tolerance",
+            "default": 0.02
+          },
+          "min_slice": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Min Slice",
+            "default": 30
+          },
+          "max_p95_ms": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max P95 Ms"
+          },
+          "max_slowdown": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Slowdown"
+          },
+          "seed": {
+            "type": "integer",
+            "title": "Seed",
+            "default": 7
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "EvalOptions"
+      },
+      "EvalRun": {
+        "properties": {
+          "confirm": {
+            "$ref": "#/components/schemas/Confirm"
+          },
+          "allow_remote": {
+            "type": "boolean",
+            "title": "Allow Remote",
+            "description": "Allow sending text to a model that isn't on this machine.",
+            "default": false
+          },
+          "action": {
+            "type": "string",
+            "const": "eval",
+            "title": "Action"
+          },
+          "options": {
+            "$ref": "#/components/schemas/EvalOptions"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "action"
+        ],
+        "title": "EvalRun"
       },
       "Health": {
         "properties": {
@@ -773,6 +1473,32 @@
         ],
         "title": "Jobs"
       },
+      "LabeledQuery": {
+        "properties": {
+          "query": {
+            "type": "string",
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Query"
+          },
+          "relevant": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 1000,
+            "minItems": 1,
+            "title": "Relevant"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "query",
+          "relevant"
+        ],
+        "title": "LabeledQuery"
+      },
       "Problem": {
         "properties": {
           "code": {
@@ -801,6 +1527,164 @@
           "detail"
         ],
         "title": "Problem"
+      },
+      "RollbackRun": {
+        "properties": {
+          "confirm": {
+            "$ref": "#/components/schemas/Confirm"
+          },
+          "allow_remote": {
+            "type": "boolean",
+            "title": "Allow Remote",
+            "description": "Allow sending text to a model that isn't on this machine.",
+            "default": false
+          },
+          "action": {
+            "type": "string",
+            "const": "rollback",
+            "title": "Action"
+          },
+          "options": {
+            "$ref": "#/components/schemas/Empty"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "action"
+        ],
+        "title": "RollbackRun"
+      },
+      "RunInfo": {
+        "properties": {
+          "run_id": {
+            "type": "string",
+            "title": "Run Id"
+          },
+          "job": {
+            "type": "string",
+            "title": "Job"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "apply",
+              "eval",
+              "cutover",
+              "rollback",
+              "cleanup"
+            ],
+            "title": "Action"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "stopping",
+              "completed",
+              "stopped",
+              "failed"
+            ],
+            "title": "State"
+          },
+          "started_at": {
+            "type": "string",
+            "title": "Started At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result",
+            "description": "The same JSON as the command's --json output, once it's finished."
+          },
+          "problem": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Problem",
+            "description": "Why the run failed."
+          },
+          "events": {
+            "type": "integer",
+            "title": "Events",
+            "description": "How many events the run has sent so far."
+          }
+        },
+        "type": "object",
+        "required": [
+          "run_id",
+          "job",
+          "action",
+          "state",
+          "started_at",
+          "finished_at",
+          "result",
+          "problem",
+          "events"
+        ],
+        "title": "RunInfo"
+      },
+      "RunStarted": {
+        "properties": {
+          "run_id": {
+            "type": "string",
+            "title": "Run Id"
+          },
+          "links": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Links"
+          }
+        },
+        "type": "object",
+        "required": [
+          "run_id",
+          "links"
+        ],
+        "title": "RunStarted"
+      },
+      "Runs": {
+        "properties": {
+          "runs": {
+            "items": {
+              "$ref": "#/components/schemas/RunInfo"
+            },
+            "type": "array",
+            "title": "Runs"
+          }
+        },
+        "type": "object",
+        "required": [
+          "runs"
+        ],
+        "title": "Runs"
       },
       "Side": {
         "properties": {
