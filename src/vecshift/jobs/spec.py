@@ -345,6 +345,57 @@ def load_job(path: Path) -> JobSpec:
         raise JobError(f"{path} has problems:\n{format_errors(exc)}") from exc
 
 
+def _setting(key: str, value: object, example: str, note: str) -> str:
+    """One line of a job file: the value quoted, or commented out with an example."""
+    if value is None:
+        return f"# {key}: {example}".ljust(29) + f"  # {note}"
+    return f"{key}: {json.dumps(value)}".ljust(29) + f"  # {note}"
+
+
+def _old_model(source_model: str | None) -> str:
+    return _setting(
+        "model",
+        source_model,
+        "openai/text-embedding-3-small",
+        "the model that made the current vectors, for eval",
+    )
+
+
+def _pg_source(
+    table: str, vector_column: str | None, text_column: str | None, source_model: str | None
+) -> str:
+    vector = _setting(
+        "vector_column", vector_column, "embedding", "needed only if the table has several"
+    )
+    text = _setting(
+        "text_column", text_column, "content", "detected automatically when it's a common name"
+    )
+    return f"""source:
+  type: pgvector
+  # The connection string is read from this environment variable, never from this file.
+  dsn_env: VECSHIFT_DSN
+  table: {json.dumps(table)}
+  {vector}
+  {text}
+  {_old_model(source_model)}
+"""
+
+
+def _model_and_limits(model: str, budget_usd: float | None) -> str:
+    budget = _setting(
+        "budget_usd", budget_usd, "50", "plan fails if the estimate is higher; apply stops there"
+    )
+    return f"""\
+# The new model, written as for `vecshift bench`, e.g. openai/text-embedding-3-large,dims=1024
+model: {json.dumps(model)}
+
+limits:
+  {budget}
+  # tokens_per_minute: 1000000   # your provider rate limit, for the duration estimate
+  # requests_per_minute: 3000
+"""
+
+
 def template(
     table: str,
     model: str,
@@ -360,41 +411,12 @@ def template(
     Settings left as ``None`` stay commented out, with an example.
     """
     name = json.dumps(table.split(".")[-1] + "-reembed")
-
-    def setting(key: str, value: object, example: str, note: str) -> str:
-        if value is None:
-            return f"# {key}: {example}".ljust(29) + f"  # {note}"
-        return f"{key}: {json.dumps(value)}".ljust(29) + f"  # {note}"
-
-    vector = setting(
-        "vector_column", vector_column, "embedding", "needed only if the table has several"
-    )
-    text = setting(
-        "text_column", text_column, "content", "detected automatically when it's a common name"
-    )
-    old = setting(
-        "model",
-        source_model,
-        "openai/text-embedding-3-small",
-        "the model that made the current vectors, for eval",
-    )
-    budget = setting(
-        "budget_usd", budget_usd, "50", "plan fails if the estimate is higher; apply stops there"
-    )
     return f"""# vecshift job: re-embed a pgvector column with a new model, side by side.
 # Check it with `vecshift plan`. Nothing is changed until `vecshift apply`.
 version: 1
 name: {name}
 
-source:
-  type: pgvector
-  # The connection string is read from this environment variable, never from this file.
-  dsn_env: VECSHIFT_DSN
-  table: {json.dumps(table)}
-  {vector}
-  {text}
-  {old}
-
+{_pg_source(table, vector_column, text_column, source_model)}
 target:
   # New vectors go in this column next to the old ones. Cutover renames the two columns
   # in one transaction, and rollback renames them back.
@@ -403,11 +425,89 @@ target:
   index: hnsw                    # hnsw, ivfflat, or none
   # metric: cosine               # defaults to the current index's metric, or cosine
 
-# The new model, written as for `vecshift bench`, e.g. openai/text-embedding-3-large,dims=1024
-model: {json.dumps(model)}
+{_model_and_limits(model, budget_usd)}"""
 
-limits:
-  {budget}
-  # tokens_per_minute: 1000000   # your provider rate limit, for the duration estimate
-  # requests_per_minute: 3000
+
+def qdrant_template(
+    model: str,
+    *,
+    collection: str | None = None,
+    table: str | None = None,
+    vector: str | None = None,
+    text_field: str | None = None,
+    vector_column: str | None = None,
+    source_model: str | None = None,
+    alias: str | None = None,
+    new_collection: str | None = None,
+    budget_usd: float | None = None,
+) -> str:
+    """A commented job file for a migration into a new Qdrant collection.
+
+    The source is a Qdrant ``collection`` or a pgvector ``table``, one or the other.
+    ``text_field`` is the payload field for a Qdrant source and the text column for a
+    pgvector one. Settings left as ``None`` stay commented out, with an example.
+    """
+    if collection is not None and table is not None:
+        raise ValueError("pass a collection or a table, not both")
+    if collection is not None:
+        name = json.dumps(collection + "-reembed")
+        what = "a Qdrant collection"
+        named = _setting(
+            "vector", vector, "dense", "needed only if the collection has several named vectors"
+        )
+        text = _setting(
+            "text_field",
+            text_field,
+            "page_content",
+            "payload field; detected automatically when it's a common name",
+        )
+        searched = _setting(
+            "collection",
+            collection,
+            "",
+            "what your application searches today" if alias else "the alias your app searches",
+        )
+        source = f"""source:
+  type: qdrant
+  # The URL and API key are read from these environment variables, never from this file.
+  url_env: VECSHIFT_QDRANT_URL
+  key_env: QDRANT_API_KEY
+  {searched}
+  {named}
+  {text}
+  {_old_model(source_model)}
 """
+        connection = ""
+        default_name = f"{alias or collection}_v2"
+    elif table is not None:
+        name = json.dumps(table.split(".")[-1] + "-reembed")
+        what = "a pgvector table"
+        source = _pg_source(table, vector_column, text_field, source_model)
+        connection = (
+            "  # The URL and API key are read from these environment variables.\n"
+            "  # url_env: VECSHIFT_QDRANT_URL\n"
+            "  # key_env: QDRANT_API_KEY\n"
+        )
+        default_name = f"{alias or table.split('.')[-1]}_v2"
+    else:
+        raise ValueError("pass a collection or a table")
+    target_collection = _setting("collection", new_collection, default_name, "the new collection")
+    target_alias = _setting(
+        "alias", alias, "documents_live", "the alias cutover points at the new collection"
+    )
+    return f"""# vecshift job: re-embed {what} into a new Qdrant collection, side by side.
+# Check it with `vecshift plan`. Nothing is changed until `vecshift apply`.
+version: 1
+name: {name}
+
+{source}
+target:
+  type: qdrant
+{connection}  # apply fills a new collection with the source's payloads and new vectors.
+  # Cutover points the alias at it in one atomic request, and rollback points it back.
+  {target_collection}
+  {target_alias}
+  index: hnsw                    # hnsw or none
+  # metric: cosine               # defaults to the source's distance, or cosine
+
+{_model_and_limits(model, budget_usd)}"""

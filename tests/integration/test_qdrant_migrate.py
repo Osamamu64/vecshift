@@ -265,3 +265,39 @@ def test_pgvector_to_qdrant(
     cleaned = cli(tmp_path, monkeypatch, "cleanup", "--yes")
     assert cleaned.exit_code == 2 and "untouched" in cleaned.output
     assert setup.execute("SELECT count(*) FROM notes").fetchone() == (39,)
+
+
+def test_guided_init_writes_a_job_plan_accepts(
+    http: httpx.Client, names: dict[str, str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    old, new, alias = names["old"], names["new"], names["alias"]
+    http.put(
+        f"/collections/{old}", json={"vectors": {"size": 4, "distance": "Cosine"}}
+    ).raise_for_status()
+    seeded = [
+        {"id": i, "vector": [1.0, 0.0, 0.0, float(i)], "payload": {"page_content": f"doc {i}"}}
+        for i in range(1, 6)
+    ]
+    http.put(f"/collections/{old}/points?wait=true", json={"points": seeded}).raise_for_status()
+    http.post(
+        "/collections/aliases",
+        json={"actions": [{"create_alias": {"alias_name": alias, "collection_name": old}}]},
+    ).raise_for_status()
+    monkeypatch.setattr("vecshift.cli_init.interactive", lambda: True)
+    monkeypatch.setenv("VECSHIFT_DSN", "placeholder")
+    monkeypatch.delenv("VECSHIFT_DSN")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("VECSHIFT_QDRANT_URL", URL or "")
+    answers = ["hash/4", "5", "y"]  # the old model, hash/256, and run the plan
+    result = runner.invoke(
+        app, ["--no-env-file", "init", "--collection", alias], input="\n".join(answers) + "\n"
+    )
+    assert result.exit_code == 0, result.output
+    assert f"Searches go through the alias {alias}" in result.output
+    assert f"vecshift plan · {alias}-reembed" in result.output, "the plan ran"
+    job = (tmp_path / "vecshift.yaml").read_text(encoding="utf-8")
+    assert f'collection: "{alias}"' in job and 'text_field: "page_content"' in job
+    planned = cli(tmp_path, monkeypatch, "plan", "--json")
+    assert planned.exit_code == 0, planned.output
+    assert json.loads(planned.stdout)["store"] == "qdrant"
+    assert http.get(f"/collections/{new}").status_code == 404, "init and plan only read"

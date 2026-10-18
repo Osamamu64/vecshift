@@ -1,0 +1,164 @@
+{
+  "plan": {
+    "changes": [
+      {
+        "kind": "string",
+        "note": "null|string",
+        "sql": "null",
+        "summary": "string"
+      }
+    ],
+    "dimensions": "number",
+    "dimensions_source": "string",
+    "estimates": {
+      "cost_usd": "number",
+      "index_memory_bytes": "null",
+      "maintenance_work_mem": "null",
+      "new_bytes": "number",
+      "old_bytes": "number",
+      "requests": "number",
+      "rows": "number",
+      "rows_exact": "bool",
+      "seconds": "null",
+      "seconds_method": "null",
+      "tokens": "number",
+      "tokens_method": "string"
+    },
+    "findings": [
+      {
+        "detail": "string",
+        "hint": "string",
+        "id": "string",
+        "severity": "string",
+        "title": "string"
+      }
+    ],
+    "job": "string",
+    "metric": "string",
+    "model": "string",
+    "ok": "bool",
+    "source": "string",
+    "store": "string",
+    "target_column": "string",
+    "vector_type": "string"
+  },
+  "apply": {
+    "column": {
+      "added": "bool",
+      "event": "string"
+    },
+    "trigger": {
+      "added": "bool",
+      "event": "string"
+    },
+    "start": {
+      "event": "string",
+      "pending": "number",
+      "spent_before": "number"
+    },
+    "batch": {
+      "event": "string",
+      "failed": "number",
+      "pass": "number",
+      "rows_written": "number",
+      "skipped": "number",
+      "spent_usd": "number",
+      "written": "number"
+    },
+    "pass": {
+      "event": "string",
+      "number": "number",
+      "remaining": "number"
+    },
+    "index": {
+      "event": "string",
+      "method": "string",
+      "state": "string"
+    },
+    "done": {
+      "event": "string",
+      "message": "string",
+      "status": "string"
+    },
+    "result": {
+      "deleted": "number",
+      "event": "string",
+      "index": "string",
+      "message": "string",
+      "payloads_copied": "number",
+      "remaining": "number",
+      "rows_failed": "number",
+      "rows_written": "number",
+      "seconds": "number",
+      "spent_usd": "number",
+      "status": "string",
+      "tokens": "number",
+      "total_spent_usd": "number"
+    }
+  },
+  "status (ready)": {
+    "failed": "number",
+    "filled": "number",
+    "index": "string",
+    "last_event": "null",
+    "live": "string",
+    "missing": "number",
+    "new": "string",
+    "next": "string",
+    "previous": "string",
+    "rows": "number",
+    "rows_written": "number",
+    "runs": "number",
+    "source_store": "string",
+    "spent_usd": "number",
+    "stage": "string",
+    "store": "string",
+    "table": "string",
+    "trigger": "bool"
+  },
+  "cutover": {
+    "alias": "string",
+    "caught_up": "number",
+    "findings": [
+      {
+        "detail": "string",
+        "hint": "null",
+        "id": "string",
+        "severity": "string",
+        "title": "string"
+      }
+    ],
+    "late": "number",
+    "new": "string",
+    "pending": "number",
+    "previous": "null",
+    "status": "string"
+  },
+  "status (cut over)": {
+    "failed": "number",
+    "filled": "number",
+    "index": "string",
+    "last_event": {
+      "alias": "string",
+      "at": "string",
+      "event": "string",
+      "new": "string",
+      "previous": "string",
+      "store": "string"
+    },
+    "live": "string",
+    "missing": "number",
+    "new": "string",
+    "next": "string",
+    "previous": "string",
+    "rows": "number",
+    "rows_written": "number",
+    "runs": "number",
+    "source_store": "string",
+    "spent_usd": "number",
+    "stage": "string",
+    "store": "string",
+    "table": "string",
+    "trigger": "bool"
+  }
+}

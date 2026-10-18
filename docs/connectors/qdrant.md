@@ -85,6 +85,35 @@ Qdrant can't change a collection's vectors in place, so a migration fills a **ne
 collection** next to the current one, with the same payloads and vectors from the new model,
 and later points your application's **alias** at it. The source is only ever read.
 
+### Setting up a job
+
+`vecshift init` writes the job file for you. At a terminal, choose **A Qdrant collection**
+or **A pgvector table, into Qdrant**, and it asks for the rest:
+
+1. The Qdrant URL, unless `VECSHIFT_QDRANT_URL` is set, and the API key if the server asks
+   for one and `QDRANT_API_KEY` isn't set. The key is hidden as you type and never written
+   to the job file. A pgvector source asks for its connection string first, as usual.
+2. For a Qdrant source, the vectors to re-embed, from the ones it finds. If an alias points
+   at the collection, the job uses it. If the application searches the collection by name,
+   `init` asks for a name for the alias cutover will create. For a pgvector source, the
+   alias to create (the table's name by default).
+3. The payload field holding the text, detected from a sample of points, then the models
+   and a spending limit, as for pgvector.
+
+If the new collection's default name (`<alias>_v2`) is taken, `init` asks for another. It
+offers to save the URL and key to `.env`, but only if you say yes, and to run `plan`.
+
+For scripts, pass flags and `init` asks nothing:
+
+```bash
+vecshift init --collection documents --model openai/text-embedding-3-small
+vecshift init --table public.documents --to qdrant --alias documents_live --model hash/256
+```
+
+`--collection` takes the alias your application searches. `--alias` sets the alias cutover
+points at the new collection; it's needed when the application searches a collection by
+name, or for a pgvector source.
+
 ### From a Qdrant collection
 
 ```yaml

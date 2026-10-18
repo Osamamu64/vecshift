@@ -7,6 +7,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `vecshift init` for Qdrant: guided at a terminal, or `--collection` with `--model` for
+  scripts. It also sets up a pgvector table migrating into Qdrant (`--to qdrant`). It asks
+  for the Qdrant URL and, if the server needs one, an API key (hidden, saved to `.env` only
+  if you say yes). It finds the vectors, uses the alias the application searches, or asks
+  for one for cutover to create, and detects the text payload field. `--alias` sets the
+  alias cutover points at the new collection.
+- `docs/json.md` describes the `--json` output of every command, which the planned REST
+  API will return too. Tests pin each output's shape in `tests/contracts/`, so a change to
+  it can't slip in unnoticed.
+
+### Changed
+
+- The guided `vecshift init` first asks what to migrate: a pgvector column, a Qdrant
+  collection, or a pgvector table into Qdrant.
+
 ## [0.4.0] - 2026-10-14
 
 ### Added
