@@ -16,6 +16,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   listens on localhost and answers only requests addressed to it; anywhere else needs
   `VECSHIFT_API_TOKEN`. Requests name environment variables, never values, and responses
   never contain one. The schema is committed as `docs/openapi.json`. See `docs/api.md`.
+- Runs over the REST API: `POST /jobs/{name}/runs` starts `apply`, `eval`, `cutover`,
+  `rollback`, or `cleanup` in the background, one run per job. Each needs its explicit
+  confirmation (`confirm.apply`, `confirm.switch`, or `confirm.name` for cleanup), and
+  `allow_remote` before text goes to a remote model. `GET /runs/{id}/events` streams
+  the run's events as server-sent events, resumable with `Last-Event-ID`; `stop` ends an
+  apply after the current batch; eval runs keep their HTML report. Runs are logged in
+  `.vecshift/runs/` and survive a restart.
 
 - `vecshift init` for Qdrant: guided at a terminal, or `--collection` with `--model` for
   scripts. It also sets up a pgvector table migrating into Qdrant (`--to qdrant`). It asks

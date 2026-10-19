@@ -128,9 +128,15 @@ markup, the browser would refuse to run it or send anything anywhere.
   Responses never include a value: connection strings are shown without the password, URL
   query strings as `?…`, and error texts are checked for the values of those variables.
 - Errors never include a traceback; the server logs only the error's type.
-- Probing a remote model needs `allow_remote=true`, the API's form of the CLI's question.
+- Probing a remote model needs `allow_remote=true`, the API's form of the CLI's question,
+  and so does any run that sends text to one (apply, eval, cutover's catch-up).
+- Runs that change things need an explicit confirmation in the request:
+  `confirm.apply`, `confirm.switch`, or for cleanup `confirm.name`, which must match the
+  name vecshift computes from the job's own record, never one the client picks.
+- Run logs (`.vecshift/runs/`) are readable by their owner only, hold no document text,
+  and have the same values scrubbed out as error texts.
 - `tests/test_security.py` plants secrets in every variable and checks every endpoint's
-  answers for them.
+  answers, run events, and run files for them.
 
 ## Supply chain
 

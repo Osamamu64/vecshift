@@ -121,7 +121,11 @@ class Guard:
     def _secure(self, send: Send) -> Send:
         async def wrapped(message: Message) -> None:
             if message["type"] == "http.response.start":
-                message["headers"] = [*message.get("headers", []), *HEADERS]
+                headers = list(message.get("headers", []))
+                present = {k.lower() for k, _ in headers}
+                # A response that sets its own policy (an HTML report) keeps it.
+                headers += [(k, v) for k, v in HEADERS if k not in present]
+                message["headers"] = headers
             await send(message)
 
         return wrapped
