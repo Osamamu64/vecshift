@@ -17,7 +17,8 @@ import re
 import secrets
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -55,7 +56,8 @@ class Event:
 @dataclass(slots=True)
 class Run:
     run_id: str
-    job: str
+    job: str | None
+    """The job's name; none for bench, which isn't about a job."""
     action: str
     folder: Path
     """Where the run's files go: ``.vecshift/runs`` in the jobs folder."""
@@ -114,7 +116,9 @@ class Run:
             self.changed.notify_all()
 
     def save(self) -> None:
-        _write(self.summary_path, json.dumps(self.to_dict(), indent=2))
+        # Under the run's lock: the run's thread and a stop request both save.
+        with self.changed:
+            _write(self.summary_path, json.dumps(self.to_dict(), indent=2))
 
     def after(self, last: int) -> list[Event]:
         """The events after number ``last``."""
@@ -132,7 +136,11 @@ class Busy(Exception):
     """The job already has an active run."""
 
     def __init__(self, run: Run) -> None:
-        super().__init__(f"{run.job} is already running {run.action} ({run.run_id}).")
+        if run.job is None:
+            message = f"A {run.action} is already running ({run.run_id})."
+        else:
+            message = f"{run.job} is already running {run.action} ({run.run_id})."
+        super().__init__(message)
         self.run = run
 
 
@@ -147,17 +155,16 @@ class Registry:
 
     def start(
         self,
-        job: str,
+        job: str | None,
         action: str,
         work: Callable[[Run], None],
         *,
         stoppable: bool = False,
     ) -> Run:
-        """Start ``work`` in the background, unless ``job`` has an active run."""
+        """Start ``work`` in the background, unless ``job`` has an active run (for bench,
+        unless another bench is running)."""
         with self.lock:
-            for run in self.runs.values():
-                if run.job == job and run.active:
-                    raise Busy(run)
+            self._idle(job)
             self.folder.mkdir(mode=0o700, parents=True, exist_ok=True)
             run = Run(new_id(), job, action, self.folder, stoppable=stoppable)
             self.runs[run.run_id] = run
@@ -182,11 +189,23 @@ class Registry:
         if run.active:  # work that returned without finishing the run
             run.finish("completed")
 
+    def _idle(self, job: str | None) -> None:
+        for run in self.runs.values():
+            if run.job == job and run.active:
+                raise Busy(run)
+
+    @contextmanager
+    def idle(self, job: str) -> Iterator[None]:
+        """While the job has no active run, and none can start: for changing its file."""
+        with self.lock:
+            self._idle(job)
+            yield
+
     def get(self, run_id: str) -> Run | None:
         with self.lock:
             return self.runs.get(run_id) if RUN_ID.fullmatch(run_id) else None
 
-    def for_job(self, job: str) -> list[Run]:
+    def for_job(self, job: str | None) -> list[Run]:
         with self.lock:
             runs = [r for r in self.runs.values() if r.job == job]
         return sorted(runs, key=lambda r: r.run_id, reverse=True)
@@ -202,7 +221,7 @@ class Registry:
                 data = json.loads(path.read_text(encoding="utf-8"))
                 run = Run(
                     run_id=path.stem,
-                    job=str(data["job"]),
+                    job=None if data["job"] is None else str(data["job"]),
                     action=str(data["action"]),
                     folder=self.folder,
                     state=str(data["state"]),
@@ -245,7 +264,7 @@ def _append(path: Path, line: str) -> None:
 
 def _write(path: Path, text: str) -> None:
     """Write a file readable by its owner only, atomically."""
-    tmp = path.with_name(path.name + ".tmp")
+    tmp = path.with_name(f"{path.name}.{threading.get_ident()}.tmp")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
         fh.write(text)

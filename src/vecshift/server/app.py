@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import time
 from collections.abc import AsyncIterator
@@ -16,13 +17,14 @@ from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Body, FastAPI, Header, Query, Request
+from fastapi import Response as Reply
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.exceptions import HTTPException
 from starlette.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 
 from vecshift import __version__
-from vecshift.server.actions import RunRequest, prepare
+from vecshift.server.actions import BenchRun, RunRequest, prepare, prepare_bench
 from vecshift.server.folder import JobFolder
 from vecshift.server.guard import Guard
 from vecshift.server.problems import environment_values, from_service, problem
@@ -109,6 +111,39 @@ class Job(BaseModel):
     state: JobState
 
 
+class JobCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(
+        description="The job file's name, without .yaml: letters, digits, and . _ -.",
+        max_length=128,
+    )
+    spec: dict[str, Any] = Field(
+        description="The job as JSON, as GET /jobs/{name} returns it. `name` inside defaults "
+        "to the file's name."
+    )
+    dry_run: bool = Field(
+        default=False, description="Only check the job and return the file it would write."
+    )
+
+
+class JobChange(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    spec: dict[str, Any] = Field(description="The whole job as JSON.")
+    dry_run: bool = Field(
+        default=False, description="Only check the job and return the file it would write."
+    )
+
+
+class JobWritten(Job):
+    written: bool = Field(description="False for a dry run: nothing was written.")
+    comments_kept: bool = Field(
+        description="Whether the file keeps its comments (a new one gets init's). False when "
+        "it had to be written afresh: its layout was more than vecshift edits in place."
+    )
+
+
 class DoctorRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -132,8 +167,8 @@ class RunStarted(BaseModel):
 
 class RunInfo(BaseModel):
     run_id: str
-    job: str
-    action: Literal["apply", "eval", "cutover", "rollback", "cleanup"]
+    job: str | None = Field(description="The job's name; null for bench.")
+    action: Literal["apply", "eval", "cutover", "rollback", "cleanup", "bench"]
     state: Literal["queued", "running", "stopping", "completed", "stopped", "failed"]
     started_at: str
     finished_at: str | None
@@ -244,27 +279,104 @@ def create_app(settings: ServerSettings) -> FastAPI:
 
     @router.get("/jobs/{name}")
     def job(name: str) -> Job:
-        from vecshift.migrate import JobState as State
         from vecshift.service import read_job
 
         path = folder.path(name)
         spec = read_job(path)
-        state = State.for_job(path, spec.name)
-        return Job(
-            name=name,
-            spec=_masked(spec.model_dump(mode="json"), spec),
-            yaml=_masked_text(path.read_text(encoding="utf-8"), spec),
-            state=JobState(
-                runs=state.runs,
-                rows_written=state.rows_written,
-                tokens=state.tokens,
-                spent_usd=state.spent_usd,
-                failed=len(state.failed),
-                history=state.history,
-                collections=state.collections,
-                updated_at=state.updated_at,
-            ),
+        return _job(name, path, spec, path.read_text(encoding="utf-8"))
+
+    @router.post("/jobs", status_code=201)
+    def create_job(request: JobCreate, response: Reply) -> JobWritten:
+        """Write a new job file, `<name>.yaml`, commented like the one `vecshift init` writes.
+
+        The job is checked first: a problem is a 422 with each field's problem in `errors`.
+        """
+        from vecshift.service.editing import render, validate, write
+
+        path = folder.new_path(request.name)
+        data = dict(request.spec)
+        data.setdefault("name", request.name)
+        _no_query_strings(data)
+        spec = validate(data)
+        _name_free(folder, spec.name, request.name)
+        written = render(spec)
+        if request.dry_run:
+            response.status_code = 200
+        else:
+            try:
+                with registry.idle(request.name):
+                    write(path, written.text, new=True)
+            except Busy as exc:  # a run of a deleted job by this name
+                raise ServiceError(
+                    str(exc), "Create the job once the run has finished.", "job.running"
+                ) from exc
+            response.headers["Location"] = f"{API}/jobs/{request.name}"
+        return JobWritten(
+            **_job(request.name, path, spec, written.text).model_dump(),
+            written=not request.dry_run,
+            comments_kept=written.comments_kept,
         )
+
+    @router.put("/jobs/{name}")
+    def change_job(name: str, request: JobChange) -> JobWritten:
+        """Change a job file. Its comments and layout stay where vecshift can keep them: a
+        setting that's no longer set is commented out. Refused while the job has a run.
+
+        A model shown with `?…` (its URL's query string hidden) keeps the one in the file.
+        """
+        from vecshift.migrate import JobState as State
+        from vecshift.service import read_job
+        from vecshift.service.editing import update, validate, write
+
+        path = folder.path(name)
+        text = path.read_text(encoding="utf-8")
+        try:
+            old = read_job(path)
+        except ServiceError:
+            old = None  # an invalid file can be fixed this way
+        data = _unmasked(dict(request.spec), old)
+        _no_query_strings(data, old)
+        spec = validate(data)
+        if (
+            old is not None
+            and spec.name != old.name
+            and State.for_job(path, old.name).path.exists()
+        ):
+            raise ServiceError(
+                f"The job's progress is kept under its name, {old.name!r}: renaming it "
+                "would lose track of it.",
+                f"Keep name: {old.name}, or create a new job.",
+                "job.renamed",
+            )
+        _name_free(folder, spec.name, name)
+        written = update(text, spec)
+        if not request.dry_run:
+            try:
+                with registry.idle(name):
+                    write(path, written.text, new=False)
+            except Busy as exc:
+                raise ServiceError(
+                    str(exc), "Change the job once the run has finished.", "job.running"
+                ) from exc
+        return JobWritten(
+            **_job(name, path, spec, written.text).model_dump(),
+            written=not request.dry_run,
+            comments_kept=written.comments_kept,
+        )
+
+    @router.delete("/jobs/{name}", status_code=204, response_class=Reply)
+    def delete_job(name: str) -> Reply:
+        """Delete the job file, and only the file: the vectors, the stores, and the job's
+        progress in `.vecshift/` stay. Refused while the job has a run."""
+        path = folder.path(name)
+        try:
+            with registry.idle(name):
+                path.unlink()
+        except Busy as exc:
+            raise ServiceError(
+                str(exc), "Delete the job once the run has finished.", "job.running"
+            ) from exc
+        return Reply(status_code=204)
 
     @router.get("/jobs/{name}/plan")
     def plan(
@@ -303,27 +415,13 @@ def create_app(settings: ServerSettings) -> FastAPI:
     def doctor(request: DoctorRequest) -> dict[str, Any]:
         """The same JSON as `vecshift doctor --json`. Read-only. The request names the
         variables holding the connection, never their values."""
-        import os
-
         from vecshift.service.doctor import doctor_pgvector, doctor_qdrant
-        from vecshift.service.environment import variables
 
-        known = {v.name: v.kind for v in variables(_jobs(folder))}
-        wanted = (
-            [(request.dsn_env, "connection")]
-            if request.store == "pgvector"
-            else [(request.url_env, "url"), (request.key_env, "key")]
-        )
-        for variable, kind in wanted:
-            if known.get(variable) != kind:
-                raise ServiceError(
-                    f"{variable} isn't a {kind} variable vecshift reads here.",
-                    "Use one GET /environment lists, such as a job's dsn_env.",
-                    "options.invalid",
-                )
-        value = os.environ.get(wanted[0][0])
-        if not value:
-            raise ServiceError(f"{wanted[0][0]} isn't set.", code="env.missing")
+        if request.store == "pgvector":
+            value = _variable(folder, request.dsn_env, "connection")
+        else:
+            value = _variable(folder, request.url_env, "url")
+            _variable(folder, request.key_env, "key", needed=False)
         if request.store == "pgvector":
             found = doctor_pgvector(
                 value,
@@ -365,11 +463,29 @@ def create_app(settings: ServerSettings) -> FastAPI:
             raise ServiceError(
                 str(exc), "Wait for it to finish, or stop it.", "job.running"
             ) from exc
-        base = f"{API}/runs/{run.run_id}"
-        return RunStarted(
-            run_id=run.run_id,
-            links={"self": base, "events": f"{base}/events", "stop": f"{base}/stop"},
-        )
+        return _started(run)
+
+    @router.post("/bench/runs", status_code=202)
+    def start_bench(request: BenchRun) -> RunStarted:
+        """Compare embedding models on a sample of documents, as `vecshift bench` does: a
+        run, with its events and an HTML leaderboard. One bench runs at a time.
+
+        Documents come from a job's source, a table or collection named by the variables
+        that reach it, or the request itself. Models that aren't on this machine need
+        `allow_remote`.
+        """
+        source = _bench_source(folder, request.documents)
+        work = prepare_bench(request, source, folder.root, secrets())
+        try:
+            run = registry.start(None, "bench", work)
+        except Busy as exc:
+            raise ServiceError(str(exc), "Wait for it to finish.", "job.running") from exc
+        return _started(run)
+
+    @router.get("/bench/runs")
+    def bench_runs() -> Runs:
+        """Bench runs, newest first."""
+        return Runs(runs=[RunInfo(**r.to_dict()) for r in registry.for_job(None)])
 
     @router.get("/jobs/{name}/runs")
     def job_runs(name: str) -> Runs:
@@ -425,10 +541,14 @@ def create_app(settings: ServerSettings) -> FastAPI:
         responses={200: {"content": {"text/html": {}, "application/json": {}}}},
     )
     def report(run_id: str, format: Literal["html", "json"] = "html") -> Response:
-        """eval's report: the same HTML as `vecshift eval --html`, or its JSON."""
+        """eval's or bench's report: the same HTML as `vecshift eval --html` (or
+        `bench --html`), or its JSON."""
         run = find(run_id)
-        if run.action != "eval" or run.state != "completed":
-            raise ServiceError("Only a completed eval run has a report.", code="report.missing")
+        reported = run.state == "completed" or (run.action == "bench" and run.result)
+        if run.action not in {"eval", "bench"} or not reported:
+            raise ServiceError(
+                "Only a finished eval or bench run has a report.", code="report.missing"
+            )
         if format == "json":
             return JSONResponse(run.result)
         try:
@@ -449,6 +569,138 @@ def create_app(settings: ServerSettings) -> FastAPI:
 
     app.add_middleware(Guard, settings=settings)
     return app
+
+
+def _started(run: Run) -> RunStarted:
+    base = f"{API}/runs/{run.run_id}"
+    return RunStarted(
+        run_id=run.run_id,
+        links={"self": base, "events": f"{base}/events", "stop": f"{base}/stop"},
+    )
+
+
+def _job(name: str, path: Path, spec: Any, text: str) -> Job:
+    from vecshift.migrate import JobState as State
+
+    state = State.for_job(path, spec.name)
+    return Job(
+        name=name,
+        spec=_masked(spec.model_dump(mode="json"), spec),
+        yaml=_masked_text(text, spec),
+        state=JobState(
+            runs=state.runs,
+            rows_written=state.rows_written,
+            tokens=state.tokens,
+            spent_usd=state.spent_usd,
+            failed=len(state.failed),
+            history=state.history,
+            collections=state.collections,
+            updated_at=state.updated_at,
+        ),
+    )
+
+
+def _name_free(folder: JobFolder, spec_name: str, file_name: str) -> None:
+    """Refuse a job ``name`` another job file uses: their progress would be mixed up."""
+    for other, job in _jobs(folder).items():
+        if other != file_name and job.name == spec_name:
+            raise ServiceError(
+                f"The job {other!r} already has the name {spec_name!r}; vecshift keeps each "
+                "job's progress under its name.",
+                "Give this job another name.",
+                "job.name_taken",
+            )
+
+
+def _unmasked(data: dict[str, Any], old: Any) -> dict[str, Any]:
+    """The spec with each model shown masked (``?…``) put back as the file has it."""
+    if old is None:
+        return data
+    pairs = {shown: raw for raw, shown in _models(old)}
+    if data.get("model") in pairs:
+        data["model"] = pairs[data["model"]]
+    source = data.get("source")
+    if isinstance(source, dict) and source.get("model") in pairs:
+        data["source"] = {**source, "model": pairs[source["model"]]}
+    return data
+
+
+def _no_query_strings(data: dict[str, Any], old: Any = None) -> None:
+    """Refuse a model whose URL has a query string, unless it's the one already in the file:
+    it can hold a key, and requests never carry secrets."""
+    from vecshift.embeddings import SpecError, parse_spec
+
+    kept = {raw for raw, _ in _models(old)} if old is not None else set()
+    source = data.get("source")
+    for raw in (data.get("model"), source.get("model") if isinstance(source, dict) else None):
+        if not isinstance(raw, str) or raw in kept:
+            continue
+        try:
+            spec = parse_spec(raw)
+        except SpecError:
+            continue  # validation reports it
+        if spec.safe_raw != raw:
+            raise ServiceError(
+                f"{spec.safe_raw}: a URL's query string can hold a key, so the API doesn't "
+                "take one.",
+                "Read the key from a variable instead, with key_env=NAME, or edit the file.",
+                "job.invalid",
+            )
+
+
+def _variable(folder: JobFolder, name: str, kind: str, *, needed: bool = True) -> str:
+    """The value of a variable a request names: one vecshift reads, of the right kind."""
+    from vecshift.service.environment import variables
+
+    known = {v.name: v.kind for v in variables(_jobs(folder))}
+    if known.get(name) != kind:
+        raise ServiceError(
+            f"{name} isn't a {kind} variable vecshift reads here.",
+            "Use one GET /environment lists, such as a job's dsn_env.",
+            "options.invalid",
+        )
+    value = os.environ.get(name, "")
+    if needed and not value:
+        raise ServiceError(f"{name} isn't set.", code="env.missing")
+    return value
+
+
+def _bench_source(folder: JobFolder, documents: Any) -> Any:
+    """Where bench's documents come from, with the variables the request names read."""
+    from vecshift.server.actions import CollectionDocuments, InlineDocuments, TableDocuments
+    from vecshift.service import read_job
+    from vecshift.service.bench import Collection, Database, Documents
+    from vecshift.service.jobs import pg_settings, qdrant_settings
+
+    if isinstance(documents, InlineDocuments):
+        return Documents(tuple((d.id, d.text) for d in documents.documents))
+    if isinstance(documents, TableDocuments):
+        dsn = _variable(folder, documents.dsn_env, "connection")
+        return Database(dsn, documents.table, documents.column, documents.text_column)
+    if isinstance(documents, CollectionDocuments):
+        url = _variable(folder, documents.url_env, "url")
+        _variable(folder, documents.key_env, "key", needed=False)
+        return Collection(
+            url,
+            documents.key_env,
+            documents.collection,
+            documents.vector,
+            documents.text_field,
+        )
+    source = read_job(folder.path(documents.job)).source
+    if source.type == "qdrant":
+        qdrant_settings(source.url_env, source.key_env)  # set, and a URL
+        return Collection(
+            os.environ[source.url_env],
+            source.key_env,
+            source.collection,
+            source.vector,
+            source.text_field,
+        )
+    pg_settings(source.dsn_env)  # set, and a connection string
+    return Database(
+        os.environ[source.dsn_env], source.table, source.vector_column, source.text_column
+    )
 
 
 def _jobs(folder: JobFolder) -> dict[str, Any]:

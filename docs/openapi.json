@@ -174,6 +174,57 @@
             }
           }
         }
+      },
+      "post": {
+        "summary": "Create Job",
+        "description": "Write a new job file, `<name>.yaml`, commented like the one `vecshift init` writes.\n\nThe job is checked first: a problem is a 422 with each field's problem in `errors`.",
+        "operationId": "create_job_api_v1_jobs_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JobCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobWritten"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          },
+          "409": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          },
+          "422": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          },
+          "502": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          }
+        }
       }
     },
     "/api/v1/jobs/{name}": {
@@ -201,6 +252,113 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          },
+          "409": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          },
+          "422": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          },
+          "502": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Change Job",
+        "description": "Change a job file. Its comments and layout stay where vecshift can keep them: a\nsetting that's no longer set is commented out. Refused while the job has a run.\n\nA model shown with `?\u2026` (its URL's query string hidden) keeps the one in the file.",
+        "operationId": "change_job_api_v1_jobs__name__put",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JobChange"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobWritten"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          },
+          "409": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          },
+          "422": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          },
+          "502": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete Job",
+        "description": "Delete the job file, and only the file: the vectors, the stores, and the job's\nprogress in `.vecshift/` stay. Refused while the job has a run.",
+        "operationId": "delete_job_api_v1_jobs__name__delete",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
           },
           "404": {
             "description": "A problem (RFC 9457).",
@@ -571,6 +729,100 @@
         }
       }
     },
+    "/api/v1/bench/runs": {
+      "get": {
+        "summary": "Bench Runs",
+        "description": "Bench runs, newest first.",
+        "operationId": "bench_runs_api_v1_bench_runs_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Runs"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          },
+          "409": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          },
+          "422": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          },
+          "502": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Start Bench",
+        "description": "Compare embedding models on a sample of documents, as `vecshift bench` does: a\nrun, with its events and an HTML leaderboard. One bench runs at a time.\n\nDocuments come from a job's source, a table or collection named by the variables\nthat reach it, or the request itself. Models that aren't on this machine need\n`allow_remote`.",
+        "operationId": "start_bench_api_v1_bench_runs_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BenchRun"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunStarted"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          },
+          "409": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          },
+          "422": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          },
+          "502": {
+            "description": "A problem (RFC 9457).",
+            "content": {
+              "application/problem+json": {}
+            }
+          }
+        }
+      }
+    },
     "/api/v1/runs/{run_id}": {
       "get": {
         "summary": "Run Info",
@@ -764,7 +1016,7 @@
     "/api/v1/runs/{run_id}/report": {
       "get": {
         "summary": "Report",
-        "description": "eval's report: the same HTML as `vecshift eval --html`, or its JSON.",
+        "description": "eval's or bench's report: the same HTML as `vecshift eval --html` (or\n`bench --html`), or its JSON.",
         "operationId": "report_api_v1_runs__run_id__report_get",
         "parameters": [
           {
@@ -885,6 +1137,117 @@
         ],
         "title": "ApplyRun"
       },
+      "BenchRun": {
+        "properties": {
+          "documents": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/JobDocuments"
+              },
+              {
+                "$ref": "#/components/schemas/TableDocuments"
+              },
+              {
+                "$ref": "#/components/schemas/CollectionDocuments"
+              },
+              {
+                "$ref": "#/components/schemas/InlineDocuments"
+              }
+            ],
+            "title": "Documents",
+            "description": "Where the documents come from.",
+            "discriminator": {
+              "propertyName": "type",
+              "mapping": {
+                "documents": "#/components/schemas/InlineDocuments",
+                "job": "#/components/schemas/JobDocuments",
+                "pgvector": "#/components/schemas/TableDocuments",
+                "qdrant": "#/components/schemas/CollectionDocuments"
+              }
+            }
+          },
+          "models": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 20,
+            "minItems": 1,
+            "title": "Models",
+            "description": "The models to compare, as provider/model[,option=value].",
+            "default": [
+              "hash/256",
+              "hash/1024"
+            ]
+          },
+          "sample": {
+            "type": "integer",
+            "maximum": 100000.0,
+            "minimum": 10.0,
+            "title": "Sample",
+            "description": "Documents to sample.",
+            "default": 1000
+          },
+          "num_queries": {
+            "type": "integer",
+            "maximum": 10000.0,
+            "minimum": 5.0,
+            "title": "Num Queries",
+            "default": 100
+          },
+          "queries": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/LabeledQuery"
+                },
+                "type": "array",
+                "maxItems": 10000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Queries",
+            "description": "Labeled queries, instead of proxy ones."
+          },
+          "generate_queries": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Generate Queries",
+            "description": "A chat model that writes the queries."
+          },
+          "seed": {
+            "type": "integer",
+            "title": "Seed",
+            "default": 7
+          },
+          "cache": {
+            "type": "boolean",
+            "title": "Cache",
+            "description": "Reuse vectors from the embedding cache.",
+            "default": true
+          },
+          "allow_remote": {
+            "type": "boolean",
+            "title": "Allow Remote",
+            "description": "Allow sending text to a model that isn't on this machine.",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "documents"
+        ],
+        "title": "BenchRun"
+      },
       "CleanupRun": {
         "properties": {
           "confirm": {
@@ -911,6 +1274,67 @@
           "action"
         ],
         "title": "CleanupRun"
+      },
+      "CollectionDocuments": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "qdrant",
+            "title": "Type"
+          },
+          "url_env": {
+            "type": "string",
+            "title": "Url Env",
+            "description": "The URL's variable.",
+            "default": "VECSHIFT_QDRANT_URL"
+          },
+          "key_env": {
+            "type": "string",
+            "title": "Key Env",
+            "description": "The API key's variable.",
+            "default": "QDRANT_API_KEY"
+          },
+          "collection": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Collection",
+            "description": "A collection or alias."
+          },
+          "vector": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vector"
+          },
+          "text_field": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text Field"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "type"
+        ],
+        "title": "CollectionDocuments"
       },
       "Confirm": {
         "properties": {
@@ -1098,6 +1522,28 @@
         ],
         "title": "DoctorRequest"
       },
+      "Document": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Id"
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 100000,
+            "title": "Text"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "text"
+        ],
+        "title": "Document"
+      },
       "Empty": {
         "properties": {},
         "additionalProperties": false,
@@ -1277,6 +1723,31 @@
         "type": "object",
         "title": "Health"
       },
+      "InlineDocuments": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "documents",
+            "title": "Type"
+          },
+          "documents": {
+            "items": {
+              "$ref": "#/components/schemas/Document"
+            },
+            "type": "array",
+            "maxItems": 100000,
+            "minItems": 1,
+            "title": "Documents"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "type",
+          "documents"
+        ],
+        "title": "InlineDocuments"
+      },
       "Job": {
         "properties": {
           "name": {
@@ -1306,6 +1777,79 @@
           "state"
         ],
         "title": "Job"
+      },
+      "JobChange": {
+        "properties": {
+          "spec": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Spec",
+            "description": "The whole job as JSON."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "title": "Dry Run",
+            "description": "Only check the job and return the file it would write.",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "spec"
+        ],
+        "title": "JobChange"
+      },
+      "JobCreate": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 128,
+            "title": "Name",
+            "description": "The job file's name, without .yaml: letters, digits, and . _ -."
+          },
+          "spec": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Spec",
+            "description": "The job as JSON, as GET /jobs/{name} returns it. `name` inside defaults to the file's name."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "title": "Dry Run",
+            "description": "Only check the job and return the file it would write.",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "spec"
+        ],
+        "title": "JobCreate"
+      },
+      "JobDocuments": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "job",
+            "title": "Type"
+          },
+          "job": {
+            "type": "string",
+            "maxLength": 128,
+            "title": "Job",
+            "description": "Sample the source of this job."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "type",
+          "job"
+        ],
+        "title": "JobDocuments"
       },
       "JobState": {
         "properties": {
@@ -1457,6 +2001,48 @@
         ],
         "title": "JobSummary"
       },
+      "JobWritten": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "spec": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Spec",
+            "description": "The job file as JSON."
+          },
+          "yaml": {
+            "type": "string",
+            "title": "Yaml",
+            "description": "The job file as written."
+          },
+          "state": {
+            "$ref": "#/components/schemas/JobState"
+          },
+          "written": {
+            "type": "boolean",
+            "title": "Written",
+            "description": "False for a dry run: nothing was written."
+          },
+          "comments_kept": {
+            "type": "boolean",
+            "title": "Comments Kept",
+            "description": "Whether the file keeps its comments (a new one gets init's). False when it had to be written afresh: its layout was more than vecshift edits in place."
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "spec",
+          "yaml",
+          "state",
+          "written",
+          "comments_kept"
+        ],
+        "title": "JobWritten"
+      },
       "Jobs": {
         "properties": {
           "jobs": {
@@ -1562,8 +2148,16 @@
             "title": "Run Id"
           },
           "job": {
-            "type": "string",
-            "title": "Job"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job",
+            "description": "The job's name; null for bench."
           },
           "action": {
             "type": "string",
@@ -1572,7 +2166,8 @@
               "eval",
               "cutover",
               "rollback",
-              "cleanup"
+              "cleanup",
+              "bench"
             ],
             "title": "Action"
           },
@@ -1708,6 +2303,61 @@
           "name"
         ],
         "title": "Side"
+      },
+      "TableDocuments": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "pgvector",
+            "title": "Type"
+          },
+          "dsn_env": {
+            "type": "string",
+            "title": "Dsn Env",
+            "description": "The connection string's variable.",
+            "default": "VECSHIFT_DSN"
+          },
+          "table": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Table"
+          },
+          "column": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Column",
+            "description": "The vector column, if there are several."
+          },
+          "text_column": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text Column"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "type"
+        ],
+        "title": "TableDocuments"
       },
       "Variable": {
         "properties": {

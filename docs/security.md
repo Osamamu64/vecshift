@@ -135,8 +135,14 @@ markup, the browser would refuse to run it or send anything anywhere.
   name vecshift computes from the job's own record, never one the client picks.
 - Run logs (`.vecshift/runs/`) are readable by their owner only, hold no document text,
   and have the same values scrubbed out as error texts.
+- Job files written over the API name variables, never values. A model URL's query
+  string (which can hold a key) is shown as `?…`; sending it back keeps the file's, and
+  a new one is refused. Writes are refused while the job has a run, and `DELETE`
+  removes the file only, never vectors or the job's progress.
+- bench over the API reads only the variables vecshift reads anyway (as doctor does),
+  and needs `allow_remote` before any model or query writer off this machine gets text.
 - `tests/test_security.py` plants secrets in every variable and checks every endpoint's
-  answers, run events, and run files for them.
+  answers (job writes and bench runs included), run events, and run files for them.
 
 ## Supply chain
 

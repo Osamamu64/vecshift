@@ -23,6 +23,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the run's events as server-sent events, resumable with `Last-Event-ID`; `stop` ends an
   apply after the current batch; eval runs keep their HTML report. Runs are logged in
   `.vecshift/runs/` and survive a restart.
+- Job files over the REST API: `POST /jobs` writes a new one from `init`'s commented
+  template, `PUT /jobs/{name}` changes one in place, keeping its comments, and
+  `DELETE /jobs/{name}` removes the file only. Jobs are checked first (field problems
+  in `errors`), `dry_run` shows the file without writing it, and writes wait for the
+  job's run to finish. Renaming a job that has started is refused, as is a model URL
+  with a new query string.
+- `bench` over the REST API: `POST /bench/runs` compares models on a job's source, a
+  table or collection, or documents in the request, as a run with `plan` and `step`
+  events and the HTML leaderboard as its report.
 
 - `vecshift init` for Qdrant: guided at a terminal, or `--collection` with `--model` for
   scripts. It also sets up a pgvector table migrating into Qdrant (`--to qdrant`). It asks
@@ -39,10 +48,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - The guided `vecshift init` first asks what to migrate: a pgvector column, a Qdrant
   collection, or a pgvector table into Qdrant.
 - The migration commands (`doctor`, `plan`, `apply`, `status`, `eval`, `cutover`,
-  `rollback`, and `cleanup`) now run through a service layer, `vecshift.service`, which the planned REST
-  API will share. Their output and exit codes are unchanged. The layer never prompts: it
-  asks callbacks before sending text to a remote model or changing anything, and raises
-  `ServiceError` with a stable `code` instead of exiting.
+  `rollback`, and `cleanup`) and `bench` now run through a service layer,
+  `vecshift.service`, which the REST API shares. Their output and exit codes are
+  unchanged. The layer never prompts: it asks callbacks before sending text to a remote
+  model or changing anything, and raises `ServiceError` with a stable `code` instead of
+  exiting.
+
+### Fixed
+
+- `vecshift bench --yes` with a model whose API key isn't set no longer stops with a
+  traceback: that model is listed as failed, with what to set, and the others still run.
+- The REST API could fail a stop request when it saved a run's summary at the same moment
+  as the run itself.
 
 ## [0.4.0] - 2026-10-14
 
