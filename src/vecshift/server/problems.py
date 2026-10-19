@@ -23,6 +23,9 @@ QUERY = re.compile(r"(https?://[^\s?#'\",()]+)\?[^\s'\",()]*")
 
 STATUS = {
     "job.missing": 404,
+    "job.exists": 409,
+    "job.name_taken": 409,
+    "job.renamed": 409,
     "run.missing": 404,
     "report.missing": 404,
     "run.finished": 409,
@@ -36,6 +39,7 @@ STATUS = {
     "confirm.mismatch": 422,
     "source.unsupported": 422,
     "source.no_text": 422,
+    "documents.invalid": 422,
     "env.missing": 409,
     "source.ambiguous": 409,
     "job.running": 409,
@@ -78,10 +82,16 @@ def problem(
 
 
 def from_service(exc: ServiceError, secrets: Iterable[str] = ()) -> JSONResponse:
+    secrets = list(secrets)
     extra: dict[str, Any] = {}
     candidates = getattr(exc, "candidates", None)
     if candidates is not None:
         extra["candidates"] = [c.to_dict() for c in candidates]
+    errors = getattr(exc, "errors", None)
+    if errors is not None:
+        extra["errors"] = [
+            {k: scrub(str(v), secrets) for k, v in error.items()} for error in errors
+        ]
     return problem(
         status_for(exc.code), exc.message, code=exc.code, hint=exc.hint, secrets=secrets, **extra
     )

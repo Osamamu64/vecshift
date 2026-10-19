@@ -619,6 +619,59 @@ def test_the_api_never_returns_a_secret(
             client.get(f"/api/v1/jobs/{job}/runs"),
         ]
     assert '"code":"connect.failed"' in responses[-6].text.replace(" ", "")
+    # Bench: one that fails connecting with the planted connection string, and one that
+    # works.
+    benches: list[dict[str, Any]] = [
+        {"documents": {"type": "job", "job": "articles"}, "models": ["hash/8"]},
+        {"documents": {"type": "pgvector", "table": "articles"}, "models": ["hash/8"]},
+        {
+            "documents": {"type": "job", "job": "docs"},
+            "models": ["hash/8"],
+            "queries": [{"query": "text 1", "relevant": ["1"]}],
+        },
+    ]
+    for body in benches:
+        started = client.post("/api/v1/bench/runs", json=body, **post)
+        assert started.status_code == 202, started.text
+        run_id = started.json()["run_id"]
+        deadline = time.monotonic() + 60
+        while client.get(f"/api/v1/runs/{run_id}").json()["state"] in {"queued", "running"}:
+            assert time.monotonic() < deadline
+            time.sleep(0.05)
+        responses += [
+            client.get(f"/api/v1/runs/{run_id}"),
+            client.get(f"/api/v1/runs/{run_id}/events"),
+            client.get(f"/api/v1/runs/{run_id}/report"),
+        ]
+    responses.append(client.get("/api/v1/bench/runs"))
+    # Job files: created, changed (one whose model URL hides a token), checked, deleted.
+    articles = client.get("/api/v1/jobs/articles").json()["spec"]
+    responses += [
+        client.post(
+            "/api/v1/jobs",
+            json={"name": "fresh", "spec": {"source": {"table": "t"}, "model": "hash/8"}},
+            **post,
+        ),
+        client.post(
+            "/api/v1/jobs",
+            json={"name": "bad", "spec": {"source": {"dsn_env": planted["VECSHIFT_DSN"]}}},
+            **post,
+        ),
+        client.put(
+            "/api/v1/jobs/articles",
+            json={"spec": {**articles, "limits": {"budget_usd": 3}}},
+            **post,
+        ),
+        client.put(
+            "/api/v1/jobs/articles",
+            json={"spec": {**articles, "name": None}, "dry_run": True},
+            **post,
+        ),
+        client.delete("/api/v1/jobs/fresh", **post),
+    ]
+    assert "sk-in-the-url" in (jobs / "articles.yml").read_text(encoding="utf-8")
+    for response in responses[-5:]:
+        assert "sk-in-the-url" not in response.text, response.url
     runs = jobs / ".vecshift" / "runs"
     on_disk = "".join(f.read_text(encoding="utf-8") for f in runs.iterdir())
     for secret in ("pw-PLANTED-dsn", "PLANTED-qdrant-key", "PLANTED-openai-key"):

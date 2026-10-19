@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import sys
 from pathlib import Path
@@ -11,13 +10,12 @@ from typing import TYPE_CHECKING, Annotated, Any
 import typer
 
 from vecshift import __version__
-from vecshift.cli_style import warn_if_password_on_command_line
+from vecshift.cli_style import reports_errors, warn_if_password_on_command_line
+from vecshift.service.bench import DEFAULT_MODELS
 
 if TYPE_CHECKING:
     from vecshift.bench import BenchResult, PlanItem
     from vecshift.embeddings import ModelSpec
-
-DEFAULT_MODELS = ["hash/256", "hash/1024"]
 
 
 def _fail(message: str, hint: str | None = None) -> typer.Exit:
@@ -192,6 +190,7 @@ def _render(result: BenchResult) -> None:
         ui.console.print()
 
 
+@reports_errors
 def bench(
     ctx: typer.Context,
     model: Annotated[
@@ -275,97 +274,49 @@ def bench(
 ) -> None:
     """Compare embedding models on a sample of your own data."""
     warn_if_password_on_command_line(ctx, dsn)
-    try:
-        from vecshift.bench import Benchmark, CorpusError, Query, plan, run
-        from vecshift.bench import corpus as corpus_mod
-        from vecshift.embeddings import EmbeddingCache, SpecError, parse_spec
-    except ImportError as exc:  # pragma: no cover - a broken install
-        raise _fail(
-            "A package vecshift needs is missing.",
-            "Reinstall: pip install --force-reinstall vecshift",
-        ) from exc
+    from vecshift.service.bench import (
+        BenchNotice,
+        BenchOptions,
+        Collection,
+        Database,
+        DocumentsFile,
+        Source,
+        check,
+        run_bench,
+    )
 
-    if queries and generate_queries:
-        raise _fail("Use either --queries or --generate-queries, not both.")
-    if save_queries and not generate_queries:
-        raise _fail(
-            "--save-queries only works with --generate-queries.",
-            "Proxy queries change the documents they come from, so they can't be reused.",
-        )
-    try:
-        specs = [parse_spec(m) for m in (model or DEFAULT_MODELS)]
-        generator_spec = parse_spec(generate_queries) if generate_queries else None
-    except SpecError as exc:
-        raise _fail(str(exc)) from exc
+    options = BenchOptions(
+        models=tuple(model or DEFAULT_MODELS),
+        sample_size=sample_size,
+        num_queries=num_queries,
+        queries=queries,
+        generate_queries=generate_queries,
+        save_queries=save_queries,
+        seed=seed,
+        cache=not no_cache,
+    )
+    check(options)
     if not model:
         _note(
             "No --model given, so comparing two free hashing baselines. Add e.g. "
             "-m openai/text-embedding-3-small -m ollama/nomic-embed-text"
         )
 
-    try:
-        labeled = corpus_mod.load_queries(queries) if queries else None
-        wanted = {r for q in labeled for r in q.relevant} if labeled else set()
-        if docs is not None:
-            documents = corpus_mod.sample(
-                corpus_mod.load_documents(docs), sample_size, wanted, seed
-            )
-            source = docs.name
-        elif qdrant_url and (collection or vector or _explicit(ctx, "qdrant_url") or not dsn):
-            documents, source = _from_qdrant(
-                qdrant_url, collection, vector, text_column, sample_size, wanted
-            )
-        elif dsn:
-            documents, source = _from_database(dsn, table, column, text_column, sample_size, wanted)
-        else:
-            raise _fail(
-                "No documents to benchmark.",
-                "Pass --docs FILE, a database with --dsn (or VECSHIFT_DSN) and --table, or "
-                "Qdrant with --qdrant URL and --collection.",
-            )
-    except CorpusError as exc:
-        raise _fail(str(exc)) from exc
+    source: Source | None = None
+    if docs is not None:
+        source = DocumentsFile(docs)
+    elif qdrant_url and (collection or vector or _explicit(ctx, "qdrant_url") or not dsn):
+        source = Collection(
+            qdrant_url, collection=collection, vector=vector, text_field=text_column
+        )
+    elif dsn:
+        source = Database(dsn, table, column, text_column)
 
-    notes: list[str] = []
-    if labeled is not None:
-        ids = {d.id for d in documents}
-        kept = [Query(q.text, q.relevant & ids) for q in labeled if q.relevant & ids]
-        if len(kept) < len(labeled):
-            notes.append(
-                f"{len(labeled) - len(kept)} labeled queries had no relevant document "
-                "in the corpus and were skipped."
-            )
-        if not kept:
-            raise _fail("None of the labeled queries' documents are in the corpus.")
-        benchmark = Benchmark(documents, kept, "labeled", notes)
-    elif generator_spec is not None:
-        benchmark = Benchmark(documents, [], "generated", notes)
-    else:
-        try:
-            edited, proxy, proxy_notes = corpus_mod.proxy_queries(documents, num_queries, seed)
-        except CorpusError as exc:
-            raise _fail(str(exc)) from exc
-        benchmark = Benchmark(edited, proxy, "proxy", proxy_notes)
+    def confirm(notice: BenchNotice) -> bool:
+        _confirm(list(notice.items), notice.generator, notice.documents, yes)
+        return True
 
-    if generator_spec is not None:
-        est = Benchmark(documents, [Query("x" * 60, frozenset())] * num_queries, "", [])
-        _confirm(plan(est, specs), generator_spec, len(documents), yes)
-        benchmark.queries = asyncio.run(_generate(generator_spec, documents, num_queries, seed))
-        if not benchmark.queries:
-            raise _fail("The chat model didn't return any queries.")
-        benchmark.notes.append(f"Queries were written by {generator_spec.name}.")
-        if save_queries:
-            corpus_mod.save_queries(save_queries, benchmark.queries)
-            _note(f"Saved {len(benchmark.queries)} queries to {save_queries}")
-    else:
-        _confirm(plan(benchmark, specs), None, len(benchmark.documents), yes)
-
-    cache = None if no_cache else EmbeddingCache()
-    result = asyncio.run(
-        run(benchmark, specs, cache, source, on_model=lambda s: _note(f"Embedding with {s.name}…"))
-    )
-    if cache:
-        cache.close()
+    result = run_bench(source, options, confirm=confirm, on_step=_note)
 
     if html is not None:
         from vecshift.bench.html import render_html
@@ -384,77 +335,6 @@ def bench(
         raise typer.Exit(1)
 
 
-async def _generate(spec: ModelSpec, documents: list, n: int, seed: int) -> list:  # type: ignore[type-arg]
-    from vecshift.bench.generate import GenerationError, QueryGenerator
-
-    try:
-        generator = QueryGenerator(spec)
-    except GenerationError as exc:
-        raise _fail(str(exc)) from exc
-    try:
-        return await generator.generate(documents, n, seed)
-    except GenerationError as exc:
-        raise _fail(str(exc)) from exc
-    finally:
-        await generator.aclose()
-
-
 def _explicit(ctx: typer.Context, name: str) -> bool:
     source = ctx.get_parameter_source(name)
     return source is not None and source.name == "COMMANDLINE"
-
-
-def _from_qdrant(
-    url: str,
-    collection: str | None,
-    vector: str | None,
-    text_field: str | None,
-    size: int,
-    wanted: set[str],
-) -> tuple[list, str]:  # type: ignore[type-arg]
-    from vecshift.bench import Document
-    from vecshift.bench.corpus import clip
-    from vecshift.connectors import qdrant
-    from vecshift.connectors.qdrant.documents import sample_documents
-
-    try:
-        settings = qdrant.prepare(url)
-        with qdrant.QdrantClient(settings) as client:
-            rows, name = sample_documents(client, collection, vector, text_field, size, wanted)
-    except qdrant.QdrantError as exc:
-        raise _fail(str(exc), exc.hint) from exc
-    return [Document(i, clip(t)) for i, t in rows], name
-
-
-def _from_database(
-    dsn: str,
-    table: str | None,
-    column: str | None,
-    text_column: str | None,
-    size: int,
-    wanted: set[str],
-) -> tuple[list, str]:  # type: ignore[type-arg]
-    try:
-        from vecshift.connectors import pgvector
-        from vecshift.connectors.pgvector.documents import sample_documents
-    except ImportError as exc:  # pragma: no cover
-        raise _fail(
-            "The PostgreSQL driver is missing.",
-            "Reinstall: pip install --force-reinstall vecshift",
-        ) from exc
-    from vecshift.bench import Document
-    from vecshift.bench.corpus import clip
-
-    try:
-        settings = pgvector.prepare(dsn)
-        conn = pgvector.connect(settings)
-    except pgvector.ConnectError as exc:
-        raise _fail(f"Couldn't connect: {exc}", exc.hint) from exc
-    try:
-        rows, name = sample_documents(conn, table, column, text_column, size, wanted)
-    except pgvector.TargetSelectionError as exc:
-        raise _fail(str(exc)) from exc
-    finally:
-        conn.rollback()
-        conn.close()
-    return [Document(i, clip(t)) for i, t in rows], name

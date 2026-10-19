@@ -117,7 +117,11 @@ async def _run_one(bench: Benchmark, spec: ModelSpec, cache: EmbeddingCache | No
         price_per_million_tokens=spec.price,
         local=spec.is_local,
     )
-    embedder = create_embedder(spec)
+    try:
+        embedder = create_embedder(spec)
+    except EmbeddingError as exc:  # such as a missing API key: this model fails, not the bench
+        result.error = str(exc)
+        return result
     use_cache = cache is not None and spec.provider != "hash"
     wrapped = CachedEmbedder(embedder, cache) if use_cache and cache else None
     try:

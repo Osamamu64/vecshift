@@ -35,6 +35,19 @@ class JobFolder:
                     return path
         raise ServiceError(f"There's no job called {name!r} here.", code="job.missing")
 
+    def new_path(self, name: str) -> Path:
+        """Where a new job called ``name`` goes; refused if the name is taken or unusable."""
+        if not NAME.fullmatch(name) or ".." in name:
+            raise ServiceError(
+                f"{name!r} can't be a job's name.",
+                "Use letters, digits, and . _ - (up to 128), starting with a letter or digit.",
+                "options.invalid",
+            )
+        for suffix in SUFFIXES:
+            if (self.root / f"{name}{suffix}").exists():
+                raise ServiceError(f"There's already a job called {name!r}.", code="job.exists")
+        return self.root / f"{name}.yaml"
+
     def relative(self, text: str) -> str:
         """``text`` with this folder's path taken out of file names: callers needn't know
         where the server keeps its files."""

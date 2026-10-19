@@ -4,8 +4,8 @@
 its JSON is the CLI's `--json` output. It's the base for the web UI, scripts, and other
 tools.
 
-> **Preview.** The endpoints may still change before 0.5.0. Editing job files and `bench`
-> over HTTP come next.
+> **Preview.** The endpoints may still change before 0.5.0, when the web UI built on them
+> ships.
 
 ## Running it
 
@@ -87,6 +87,44 @@ request can't make the server read any other variable. When the table has severa
 columns (or the Qdrant collection several vectors), the answer is **409** with
 `candidates` to choose from.
 
+## Editing jobs
+
+| Method | Path | Body | Returns |
+|---|---|---|---|
+| POST | `/jobs` | `{name, spec, dry_run}` | **201**: the job, as `GET /jobs/{name}` returns it, plus `written` and `comments_kept`. **409** `job.exists` |
+| PUT | `/jobs/{name}` | `{spec, dry_run}` | The changed job. **409** `job.running` while the job has a run |
+| DELETE | `/jobs/{name}` | | **204**. The job file only: the vectors, the stores, and the job's progress in `.vecshift/` stay. **409** `job.running` while the job has a run |
+
+`spec` is the job as JSON, the same shape `GET /jobs/{name}` returns and the job file
+holds. `name` is the file's name (`notes` writes `notes.yaml`), and `spec.name` defaults to
+it. With `dry_run: true` nothing is written: the answer shows the file it would write.
+
+```console
+$ curl -s -X POST localhost:8765/api/v1/jobs -H 'X-Vecshift: 1' \
+    -H 'content-type: application/json' \
+    -d '{"name": "notes", "spec": {"source": {"table": "public.notes"}, "model": "openai/text-embedding-3-small"}}'
+```
+
+**Checked first.** A job that isn't valid is a **422** (`job.invalid`): `detail` lists the
+problems in the words `vecshift plan` uses for a job file, and `errors` has them one by one
+(`{"loc": "source.collection", "message": "required"}`).
+
+**Comments stay.** A new file starts from the commented template `vecshift init` writes.
+A change edits the file in place: each setting keeps its line and its comment, a setting
+that's no longer set is commented out, and a new one fills in its commented-out example
+when there is one. If the file is laid out in a way vecshift can't follow line by line
+(flow style like `source: {table: docs}`, block text, anchors), it's written afresh and
+`comments_kept` is `false`.
+
+**Names.** vecshift keeps a job's progress under its `name`, so two job files can't share
+one (**409** `job.name_taken`), and a job that has started can't be renamed (**409**
+`job.renamed`): its progress would be lost track of.
+
+**Model URLs.** `GET /jobs/{name}` shows a model URL's query string as `?…`, as it can hold
+a key. Sending that back unchanged keeps what the file has; a new query string is refused
+(**422**), since requests never carry secrets. Read a key from a variable with
+`key_env=NAME` instead, or edit the file.
+
 ## Runs
 
 `apply`, `eval`, `cutover`, `rollback`, and `cleanup` take a while, so they run in the
@@ -99,7 +137,7 @@ background: you start a run, then follow its events.
 | GET | `/runs/{run_id}` | `run_id`, `job`, `action`, `state`, `started_at`, `finished_at`, `result`, `problem`, and `events` (how many so far) |
 | GET | `/runs/{run_id}/events` | The run's events as [server-sent events](#events) |
 | POST | `/runs/{run_id}/stop` | **202**: apply stops after the current batch, like the first Ctrl-C |
-| GET | `/runs/{run_id}/report` | eval's HTML report, as `vecshift eval --html` writes it; `?format=json` for its JSON |
+| GET | `/runs/{run_id}/report` | eval's or bench's HTML report, as `--html` writes it; `?format=json` for its JSON |
 
 A run's `state` is `queued`, `running`, `stopping`, then `completed`, `stopped` (apply
 stopped by request or by the budget: run it again to continue), or `failed` (`problem` says
@@ -156,7 +194,8 @@ data: {"pass": 1, "written": 256, "skipped": 0, "failed": 0, "rows_written": 256
 | Event | From | `data` |
 |---|---|---|
 | `column`, `trigger`, `start`, `batch`, `pass`, `index`, `done` | apply | exactly what `apply --json` prints, line by line |
-| `step` | eval | `{"message": "Embedding queries"}`: what it's doing now |
+| `step` | eval, bench | `{"message": "Embedding queries"}`: what it's doing now |
+| `plan` | bench | what it's about to embed: the models, tokens, cost, and where each one sends the text |
 | `finding` | cutover | a readiness check, as in `cutover --json`'s `findings` |
 | `switched` | cutover, rollback | which names now point where |
 | `deleted` | cleanup | `{"name": …}` |
@@ -166,11 +205,49 @@ data: {"pass": 1, "written": 256, "skipped": 0, "failed": 0, "rows_written": 256
 ### Runs on disk
 
 Each run's events go to `.vecshift/runs/<run_id>.jsonl` in the jobs folder as they happen,
-and its summary to `<run_id>.json` (and eval's report to `<run_id>.html`), readable by
+and its summary to `<run_id>.json` (and eval's or bench's report to `<run_id>.html`), readable by
 their owner only. They hold counts, names, and messages, never document text or secrets.
 After a restart the server still lists and streams old runs; a run that was still going
 when the server stopped is marked `failed` (`run.interrupted`). Every operation is
 resumable, so running it again picks up where it stopped.
+
+## Bench
+
+| Method | Path | Returns |
+|---|---|---|
+| POST | `/bench/runs` | **202** `{run_id, links}`: [`vecshift bench`](bench.md) as a run. **409** `job.running` while another bench runs |
+| GET | `/bench/runs` | Bench runs, newest first |
+
+A bench run is followed like any other: `GET /runs/{run_id}` and its events. Its `job` is
+`null`, its `result` is the same JSON as `bench --json`, and `/runs/{run_id}/report` is the
+HTML leaderboard `bench --html` writes. It can't be stopped halfway. When every model
+fails, the run is `failed` (`model.failed`) and still has its result, with each model's
+error.
+
+```json
+{
+  "documents": {"type": "job", "job": "docs-reembed"},
+  "models": ["openai/text-embedding-3-small", "ollama/nomic-embed-text"],
+  "sample": 1000,
+  "num_queries": 100,
+  "allow_remote": true
+}
+```
+
+| Field | |
+|---|---|
+| `documents` | Where the documents come from: `{"type": "job", "job"}` samples a job's source; `{"type": "pgvector", "dsn_env", "table", "column", "text_column"}` a table; `{"type": "qdrant", "url_env", "key_env", "collection", "vector", "text_field"}` a collection; `{"type": "documents", "documents": [{"id", "text"}]}` takes them from the request |
+| `models` | The models to compare (up to 20); two free hashing baselines by default |
+| `sample` | Documents to sample (10–100,000), 1,000 by default |
+| `num_queries` | Queries to make (5–10,000), 100 by default |
+| `queries` | Labeled queries, `[{"query", "relevant": [ids]}]`, instead of proxy ones |
+| `generate_queries` | A chat model that writes the queries, such as `openai/gpt-4o-mini` |
+| `seed`, `cache` | The sampling seed (7), and whether to reuse vectors from the embedding cache (yes) |
+| `allow_remote` | Needed when a model, or the query writer, isn't on this machine |
+
+As for doctor, `dsn_env`, `url_env`, and `key_env` must be variables vecshift reads here.
+The events are `plan` (the models, estimated tokens and cost, and where each sends the
+text), `step` (`Embedding with …`), then `result` or `error`.
 
 ## Errors
 
@@ -193,10 +270,10 @@ Errors are [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) `application/probl
 | 401 | `request.unauthorized`: the token is missing or wrong |
 | 403 | `request.header`: `X-Vecshift: 1` is missing |
 | 404 | `job.missing`, `run.missing`, `report.missing`, `source.not_found` |
-| 409 | `env.missing`, `source.ambiguous`, `job.running`, `run.finished`, `run.not_stoppable`, `plan.errors`, `eval.not_applied`, `state.no_record` |
+| 409 | `env.missing`, `source.ambiguous`, `job.running`, `job.exists`, `job.name_taken`, `job.renamed`, `run.finished`, `run.not_stoppable`, `plan.errors`, `eval.not_applied`, `state.no_record` |
 | 413 | `request.too_large` |
 | 421 | `request.host`: addressed to a name other than localhost, without a token |
-| 422 | `request.invalid` (with `errors`), `job.invalid`, `options.invalid`, `consent.required`, `confirm.required`, `confirm.mismatch`, `source.unsupported` |
+| 422 | `request.invalid` (with `errors`), `job.invalid`, `options.invalid`, `consent.required`, `confirm.required`, `confirm.mismatch`, `source.unsupported`, `documents.invalid` |
 | 500 | `internal`: a bug; the server logs the error's type, never its message |
 | 502 | `connect.failed`, `database.error`, `qdrant.error`, `model.failed` |
 | 503 | `database.busy` |

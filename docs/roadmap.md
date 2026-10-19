@@ -112,7 +112,7 @@ Starts once the CLI covers the full workflow (`doctor`, `bench`, `plan`, `apply`
     ([REST API](api.md))
   - [x] Runs over HTTP (`apply`, `eval`, `cutover`, `rollback`, `cleanup`) with live
     progress as server-sent events
-  - [ ] Editing job files and `bench` over HTTP
+  - [x] Editing job files (comments kept) and `bench` over HTTP
 - Web UI for running and watching jobs: progress, throughput, errors, and cost
 - Visual views of `doctor` and `bench` reports
 - Guided cutover and rollback

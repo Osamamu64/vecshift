@@ -2,9 +2,9 @@
 
 Every action calls the same service function as its CLI command, and turns the service's
 callbacks into events: the engine's own events for apply, ``step`` for eval's progress,
-``finding`` for cutover's checks, ``switched`` and ``deleted`` for what changed, and a
-final ``result`` holding the same JSON as the command's ``--json``, or ``error`` holding a
-problem.
+``finding`` for cutover's checks, ``switched`` and ``deleted`` for what changed, ``plan``
+for what bench is about to embed, and a final ``result`` holding the same JSON as the
+command's ``--json``, or ``error`` holding a problem.
 
 Confirmations are explicit: ``confirm.apply`` for apply, ``confirm.switch`` for cutover and
 rollback, and ``confirm.name`` for cleanup, which must be the name the service computes
@@ -168,7 +168,7 @@ def _unconfirmed(what: str, field: str) -> ServiceError:
     )
 
 
-def _remote(request: _Request, models: list[str | None]) -> None:
+def _remote(request: _Request | BenchRun, models: list[str | None]) -> None:
     """Refuse a request that would send text away without ``allow_remote``."""
     from vecshift.embeddings import SpecError, parse_spec
     from vecshift.service.plan import destination
@@ -212,9 +212,17 @@ class Reporter:
             return [self.clean(v) for v in data]
         return data
 
-    def done(self, result: dict[str, Any], state: str = "completed") -> None:
+    def done(
+        self,
+        result: dict[str, Any],
+        state: str = "completed",
+        problem: dict[str, Any] | None = None,
+    ) -> None:
         self.run.result = self.clean(result)
         self.run.emit("result", self.run.result or {})
+        if problem is not None:
+            self.run.problem = self.clean(problem)
+            self.run.emit("error", self.run.problem or {})
         self.run.finish(state)
 
     def failed(self, exc: ServiceError) -> None:
@@ -230,6 +238,8 @@ class Reporter:
 
 
 def _guarded(job_file: Path, secrets: list[str], body: Callable[[Reporter], None]) -> Work:
+    """The run's work: problems become its ``error`` event, without the jobs folder's path."""
+
     def work(run: Run) -> None:
         report = Reporter(run, secrets)
         try:
@@ -367,3 +377,124 @@ def _model(job_file: Path) -> str:
     from vecshift.service import read_job
 
     return read_job(job_file).model
+
+
+class JobDocuments(_Strict):
+    type: Literal["job"]
+    job: str = Field(description="Sample the source of this job.", max_length=128)
+
+
+class TableDocuments(_Strict):
+    type: Literal["pgvector"]
+    dsn_env: str = Field(default="VECSHIFT_DSN", description="The connection string's variable.")
+    table: str | None = None
+    column: str | None = Field(default=None, description="The vector column, if there are several.")
+    text_column: str | None = None
+
+
+class CollectionDocuments(_Strict):
+    type: Literal["qdrant"]
+    url_env: str = Field(default="VECSHIFT_QDRANT_URL", description="The URL's variable.")
+    key_env: str = Field(default="QDRANT_API_KEY", description="The API key's variable.")
+    collection: str | None = Field(default=None, description="A collection or alias.")
+    vector: str | None = None
+    text_field: str | None = None
+
+
+class Document(_Strict):
+    id: str = Field(min_length=1, max_length=256)
+    text: str = Field(max_length=100_000)
+
+
+class InlineDocuments(_Strict):
+    type: Literal["documents"]
+    documents: list[Document] = Field(min_length=1, max_length=100_000)
+
+
+BenchDocuments = Annotated[
+    JobDocuments | TableDocuments | CollectionDocuments | InlineDocuments,
+    Field(discriminator="type"),
+]
+
+
+class BenchRun(_Strict):
+    documents: BenchDocuments = Field(description="Where the documents come from.")
+    models: list[str] = Field(
+        default=["hash/256", "hash/1024"],
+        min_length=1,
+        max_length=20,
+        description="The models to compare, as provider/model[,option=value].",
+    )
+    sample: int = Field(default=1000, ge=10, le=100_000, description="Documents to sample.")
+    num_queries: int = Field(default=100, ge=5, le=10_000)
+    queries: list[LabeledQuery] | None = Field(
+        default=None, max_length=10_000, description="Labeled queries, instead of proxy ones."
+    )
+    generate_queries: str | None = Field(
+        default=None, description="A chat model that writes the queries."
+    )
+    seed: int = 7
+    cache: bool = Field(default=True, description="Reuse vectors from the embedding cache.")
+    allow_remote: bool = Field(
+        default=False, description="Allow sending text to a model that isn't on this machine."
+    )
+
+
+def prepare_bench(request: BenchRun, source: Any, folder: Path, secrets: list[str]) -> Work:
+    """Check a bench request before it starts (its options and ``allow_remote``); return
+    its work. ``source`` is where the documents come from, already resolved."""
+    from vecshift.bench import Query
+    from vecshift.service.bench import BenchOptions, check
+
+    options = BenchOptions(
+        models=tuple(request.models),
+        sample_size=request.sample,
+        num_queries=request.num_queries,
+        queries=None
+        if request.queries is None
+        else tuple(Query(q.query.strip(), frozenset(q.relevant)) for q in request.queries),
+        generate_queries=request.generate_queries,
+        seed=request.seed,
+        cache=request.cache,
+    )
+    specs, generator = check(options)
+    for spec in [*specs, *([generator] if generator else [])]:
+        if spec.safe_raw != spec.raw:
+            raise ServiceError(
+                f"{spec.safe_raw}: a URL's query string can hold a key, so the API doesn't "
+                "take one.",
+                "Read the key from a variable instead, with key_env=NAME.",
+                "options.invalid",
+            )
+    _remote(request, [*request.models, request.generate_queries])
+    return _bench(options, source, folder, secrets)
+
+
+def _bench(options: Any, source: Any, folder: Path, secrets: list[str]) -> Work:
+    from vecshift import __version__
+    from vecshift.bench.html import render_html
+    from vecshift.server.runs import _write
+    from vecshift.service.bench import BenchNotice, run_bench
+
+    def body(report: Reporter) -> None:
+        def confirm(notice: BenchNotice) -> bool:
+            report.emit("plan", notice.to_dict())
+            return True  # allow_remote was checked before the run started
+
+        result = run_bench(
+            source,
+            options,
+            confirm=confirm,
+            on_step=lambda message: report.emit("step", {"message": message}),
+        )
+        _write(report.run.report_path, render_html(result, version=__version__))
+        if result.models and all(m.error for m in result.models):
+            problem = {
+                "code": "model.failed",
+                "detail": "Every model failed: each one's error is in the result.",
+            }
+            report.done(result.to_dict(), "failed", problem)
+        else:
+            report.done(result.to_dict())
+
+    return _guarded(folder / "bench", secrets, body)
