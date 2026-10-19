@@ -116,7 +116,9 @@ class Run:
             self.changed.notify_all()
 
     def save(self) -> None:
-        _write(self.summary_path, json.dumps(self.to_dict(), indent=2))
+        # Under the run's lock: the run's thread and a stop request both save.
+        with self.changed:
+            _write(self.summary_path, json.dumps(self.to_dict(), indent=2))
 
     def after(self, last: int) -> list[Event]:
         """The events after number ``last``."""
@@ -262,7 +264,7 @@ def _append(path: Path, line: str) -> None:
 
 def _write(path: Path, text: str) -> None:
     """Write a file readable by its owner only, atomically."""
-    tmp = path.with_name(path.name + ".tmp")
+    tmp = path.with_name(f"{path.name}.{threading.get_ident()}.tmp")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
         fh.write(text)

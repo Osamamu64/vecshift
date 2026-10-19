@@ -58,6 +58,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - `vecshift bench --yes` with a model whose API key isn't set no longer stops with a
   traceback: that model is listed as failed, with what to set, and the others still run.
+- The REST API could fail a stop request when it saved a run's summary at the same moment
+  as the run itself.
 
 ## [0.4.0] - 2026-10-14
 
